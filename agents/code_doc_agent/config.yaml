@@ -1,0 +1,41 @@
+agent:
+  name: code_doc_agent
+  version: 0.1.0
+
+llm:
+  provider: anthropic
+  model: claude-opus-4-7
+  temperature: 0.2
+  max_tokens: 4096
+  api_key_env: ANTHROPIC_API_KEY
+  # Uncomment to enable Ollama fallback when Anthropic is unreachable:
+  # fallback:
+  #   provider: ollama
+  #   model: llama3.1:70b
+  #   base_url: http://localhost:11434
+  #   api_key_env: ""
+
+storage:
+  postgres_url_env: DATABASE_URL
+  chroma_path: ""        # leave empty to use docker-compose Chroma at localhost:8001
+  # v0.2: generated docs are stored in Postgres (generated_docs) + Chroma (docs_<pid>),
+  # not written to disk. `output_subdir` removed.
+
+memory:
+  recent_window: 3
+  summarize_every: 5
+
+code_doc:
+  languages: [java, javascript, typescript, jsx, tsx]
+  ignore_patterns:
+    - "node_modules/**"
+    - "target/**"
+    - "build/**"
+    - "dist/**"
+    - ".git/**"
+    - ".venv/**"
+    - "__pycache__/**"
+    - ".docs/**"
+  max_verify_loops: 3
+  chunk_size_tokens: 8000
+  parallel_files: 4

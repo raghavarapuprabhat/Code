@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(DATABASE_URL='' ../backend/.venv/bin/python -c ' *)",
+      "Bash(env -u DATABASE_URL ./backend/.venv/bin/python -m compileall -q shared agents backend/app)",
+      "Bash(echo \"compile_rc=$?\")",
+      "Bash(env -u DATABASE_URL ../backend/.venv/bin/python -c ' *)",
+      "Bash(npx tsc *)"
+    ]
+  }
+}

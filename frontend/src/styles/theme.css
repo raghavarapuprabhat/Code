@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* White-theme design tokens (architecture.md §13.2). HSL components only,
+   wrapped with hsl(var(--token)) in tailwind.config.ts. */
+:root {
+  --background: 0 0% 100%; /* white canvas */
+  --surface: 210 20% 98%; /* cards / panels — near-white */
+  --surface-2: 214 32% 95%; /* hover / selected rows */
+  --border: 214 20% 88%;
+  --foreground: 222 30% 12%; /* near-black text */
+  --muted: 215 16% 47%;
+  --primary: 221 83% 53%; /* accent blue — actions, active nav */
+  --primary-foreground: 0 0% 100%;
+  --success: 142 71% 40%;
+  --warning: 38 92% 50%;
+  --danger: 0 72% 51%;
+  --radius: 0.6rem;
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 6%), 0 1px 3px rgb(16 24 40 / 4%);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * {
+    @apply border-border;
+  }
+}
+
+/* Rendered-markdown typography for chat + Documentation Hub (MarkdownView). */
+@layer components {
+  .prose-doc h1 { @apply mb-3 mt-5 text-xl font-semibold; }
+  .prose-doc h2 { @apply mb-2 mt-5 border-b pb-1 text-lg font-semibold; }
+  .prose-doc h3 { @apply mb-2 mt-4 text-base font-semibold; }
+  .prose-doc h4 { @apply mb-1 mt-3 text-sm font-semibold; }
+  .prose-doc p { @apply my-2.5; }
+  .prose-doc ul { @apply my-2.5 list-disc pl-6; }
+  .prose-doc ol { @apply my-2.5 list-decimal pl-6; }
+  .prose-doc li { @apply my-1; }
+  .prose-doc a { @apply text-primary underline-offset-2 hover:underline; }
+  .prose-doc blockquote { @apply my-3 border-l-2 border-border pl-4 text-muted; }
+  .prose-doc code {
+    @apply rounded bg-surface-2 px-1.5 py-0.5 font-mono text-[0.85em];
+  }
+  .prose-doc pre {
+    @apply my-3 overflow-auto rounded-md border bg-surface p-3;
+  }
+  .prose-doc pre code {
+    @apply bg-transparent p-0 text-[0.85em];
+  }
+  .prose-doc table { @apply my-3 w-full border-collapse text-sm; }
+  .prose-doc th,
+  .prose-doc td { @apply border px-3 py-1.5 text-left align-top; }
+  .prose-doc th { @apply bg-surface-2 font-medium; }
+  .prose-doc img { @apply max-w-full rounded-md; }
+}

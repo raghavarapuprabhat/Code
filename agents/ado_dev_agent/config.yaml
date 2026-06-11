@@ -1,0 +1,29 @@
+agent:
+  name: ado_dev_agent
+  version: 0.1.0
+
+llm:
+  provider: anthropic
+  model: claude-opus-4-7
+  temperature: 0.2
+  max_tokens: 2048
+  api_key_env: ANTHROPIC_API_KEY
+
+storage:
+  postgres_url_env: DATABASE_URL
+
+memory:
+  recent_window: 4
+  summarize_every: 6
+
+ado:
+  current_iteration_token: "@CurrentIteration"
+  history_iterations_for_velocity: 3
+  in_progress_states: ["Active", "Doing", "In Progress", "Committed"]
+  done_states: ["Done", "Closed", "Resolved", "Completed"]
+  new_states: ["New", "To Do", "Proposed"]
+
+dev:
+  candidate_top_n: 3              # how many workitems to suggest for an update
+  state_transition_on_active: "Active"   # state to flip "New" tasks into when starting work
+  ask_consent_before_update: true        # safety rail — never auto-update

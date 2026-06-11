@@ -1,0 +1,18 @@
+[project]
+name = "sre-agent"
+version = "0.1.0"
+description = "Standalone SRE triage agent (RAG over code documentation)"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.2",
+    "litellm>=1.50",
+    "chromadb>=0.5",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "structlog>=24.1",
+    "sqlalchemy>=2.0",
+    "asyncpg>=0.29",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]

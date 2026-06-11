@@ -1,0 +1,45 @@
+agent:
+  name: sre_fixer_agent
+  version: 0.1.0
+
+llm:
+  provider: anthropic
+  model: claude-opus-4-7
+  temperature: 0.0          # deterministic for code edits
+  max_tokens: 8192
+  api_key_env: ANTHROPIC_API_KEY
+
+storage:
+  postgres_url_env: DATABASE_URL
+
+memory:
+  recent_window: 4
+  summarize_every: 6
+
+fixer:
+  # ---- Safety rails ----
+  branch_prefix: "fix/sre-"           # All fix branches MUST start with this
+  protected_branches: ["main", "master", "release", "develop"]
+  forbid_force_push: true
+  forbid_branch_delete: true
+
+  # ---- Retry policy ----
+  max_fix_attempts: 3                 # Plan -> Apply -> Test cycles before raising human
+  test_timeout_seconds: 600
+
+  # ---- Test command whitelist (per language). The agent picks one based on detected build files. ----
+  test_commands:
+    java_maven:    ["mvn", "-q", "-DskipTests=false", "test"]
+    java_gradle:   ["./gradlew", "test"]
+    node_npm:      ["npm", "test", "--", "--watch=false"]
+    node_yarn:     ["yarn", "test", "--watch=false"]
+    node_pnpm:     ["pnpm", "test"]
+    python_pytest: ["pytest", "-q"]
+
+  # ---- Azure Repos ----
+  azure_repos:
+    organization_url_env: AZURE_DEVOPS_ORG       # e.g. https://dev.azure.com/myorg
+    pat_env: AZURE_DEVOPS_PAT
+    api_version: "7.1"
+    default_reviewers_env: ADO_DEFAULT_REVIEWERS  # comma-separated UPNs/group ids
+    target_branch: "refs/heads/main"

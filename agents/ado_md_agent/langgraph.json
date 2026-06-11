@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "ado_md_etl": "./graph.py:etl_graph",
+    "ado_md_drill": "./graph.py:drill_graph"
+  },
+  "env": ".env"
+}

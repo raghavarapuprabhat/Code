@@ -1,0 +1,19 @@
+[project]
+name = "ado-md-agent"
+version = "0.1.0"
+description = "Standalone ADO MD assistant — daily ETL + drill-down chat"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.2",
+    "litellm>=1.50",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "structlog>=24.1",
+    "sqlalchemy>=2.0",
+    "asyncpg>=0.29",
+    "mcp>=1.0",
+    "apscheduler>=3.10",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]

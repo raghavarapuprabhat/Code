@@ -1,0 +1,5 @@
+{
+  "dependencies": ["."],
+  "graphs": { "sre_fixer": "./graph.py:graph" },
+  "env": ".env"
+}

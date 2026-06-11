@@ -1,0 +1,24 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Frontend
+node_modules/
+dist/
+.vite/
+
+# Local generated docs (per-project)
+.docs/
+
+# Local Chroma persistent dir (when CHROMA_PATH is used)
+.chroma/
+
+# OS
+.DS_Store
+
+# Local SQLite database (default storage)
+aiagent.db

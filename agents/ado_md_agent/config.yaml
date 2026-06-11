@@ -1,0 +1,42 @@
+agent:
+  name: ado_md_agent
+  version: 0.1.0
+
+llm:
+  provider: anthropic
+  model: claude-opus-4-7
+  temperature: 0.3
+  max_tokens: 2048
+  api_key_env: ANTHROPIC_API_KEY
+
+storage:
+  postgres_url_env: DATABASE_URL
+
+memory:
+  recent_window: 4
+  summarize_every: 6
+
+ado:
+  organization_url_env: AZURE_DEVOPS_ORG
+  pat_env: AZURE_DEVOPS_PAT
+  # Squads to track. Each entry is one row in the daily snapshot.
+  squads:
+    - name: "Payments"
+      areapath: "Portfolio\\Payments"
+    - name: "Onboarding"
+      areapath: "Portfolio\\Onboarding"
+    - name: "Risk"
+      areapath: "Portfolio\\Risk"
+  # Iterations to consider "current sprint" — leave empty to use the team default.
+  current_iteration_token: "@CurrentIteration"
+  history_iterations_for_velocity: 3
+  blocked_tag: "blocked"
+  raid_tags: ["risk", "issue", "dependency", "assumption"]
+
+md:
+  # Auto-attention thresholds
+  attention:
+    overdue_threshold: 3
+    velocity_drop_pct: 20
+    blocked_threshold: 5
+  achievement_top_n: 5         # how many "key achievements" to surface per squad
