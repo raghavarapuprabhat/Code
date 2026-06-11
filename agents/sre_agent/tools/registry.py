@@ -11,9 +11,13 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
-from . import architecture, codebase, git_tools, history, probes, rag
+from . import architecture, codebase, git_tools, history, observability, probes, rag
 
 ToolFn = Callable[[str, dict, dict], Awaitable[str]]
+
+
+def _obs(config: dict) -> dict:
+    return (config.get("sre", {}) or {}).get("observability", {}) or {}
 
 
 # --- wrappers ---------------------------------------------------------------
@@ -209,6 +213,35 @@ _REGISTRY: dict[str, dict[str, Any]] = {
         "desc": "Live, read-only SQL against a resolved target — check the actual data the code reads.",
         "batch": False,
     },
+    # v0.6 — observability (each individually config-gated; §9.17.1).
+    "query_logs": {
+        "fn": observability.query_logs_tool,
+        "args": {"query": "search terms", "time_range": "e.g. 14:00-14:10", "env": "dev|test|prod"},
+        "desc": "Search application logs around the incident — frequency, first occurrence, correlation ids.",
+        "batch": False,
+        "gate": lambda c: bool((_obs(c).get("logs", {}) or {}).get("enabled")),
+    },
+    "query_metrics": {
+        "fn": observability.query_metrics_tool,
+        "args": {"metric": "error_rate|latency|saturation", "time_range": "window", "env": "dev|test|prod"},
+        "desc": "Error rate / latency / saturation around the incident.",
+        "batch": False,
+        "gate": lambda c: bool((_obs(c).get("metrics", {}) or {}).get("enabled")),
+    },
+    "get_deployments": {
+        "fn": observability.get_deployments_tool,
+        "args": {"time_range": "window", "env": "dev|test|prod"},
+        "desc": "Releases to the affected service (build id, commit range, time) — deploy correlation.",
+        "batch": False,
+        "gate": lambda c: bool((_obs(c).get("deployments", {}) or {}).get("enabled")),
+    },
+    "ingest_user_logs": {
+        "fn": observability.ingest_user_logs_tool,
+        "args": {"text": "pasted/attached log content", "query": "optional filter"},
+        "desc": "Parse user-supplied logs when system access is unavailable — timestamps, errors, correlation.",
+        "batch": False,
+        "gate": lambda c: bool((_obs(c).get("manual_fallback", {}) or {}).get("enabled", True)),
+    },
 }
 
 
@@ -216,8 +249,8 @@ def available_tools(config: dict, *, batch: bool = False) -> dict[str, ToolFn]:
     """Return {name: fn} enabled for this run.
 
     Per-tool config toggles live under ``sre.tools`` (default on). In batch mode
-    only tools flagged ``batch`` are offered — no git/callgraph/grep inside a
-    500-row CSV run (§9.14).
+    only tools flagged ``batch`` are offered (no git/callgraph/grep/probes/obs).
+    Observability tools are further gated by their ``gate`` lambda against config.
     """
     toggles = (config.get("sre", {}) or {}).get("tools", {}) or {}
     out: dict[str, ToolFn] = {}
@@ -226,6 +259,13 @@ def available_tools(config: dict, *, batch: bool = False) -> dict[str, ToolFn]:
             continue
         if batch and not spec["batch"]:
             continue
+        gate = spec.get("gate")
+        if gate is not None:
+            try:
+                if not gate(config):
+                    continue
+            except Exception:  # noqa: BLE001
+                continue
         out[name] = spec["fn"]
     return out
 
