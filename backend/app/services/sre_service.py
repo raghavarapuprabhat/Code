@@ -62,13 +62,14 @@ async def stream_triage(
         prior_state = await _load_prior_state(session, conv_id)
 
         await memory.append_message(conv_id, "user", user_message)
-        yield {"type": "node", "name": "intake"}
+        yield {"type": "node", "name": "understand"}
 
         try:
             result = await run_triage(
                 project_id=project_id,
                 user_message=user_message,
                 prior_state=prior_state,
+                conversation_id=conv_id,
             )
         except Exception as e:  # noqa: BLE001
             logger.exception("sre_triage_failed", conv=conv_id)
@@ -80,8 +81,18 @@ async def stream_triage(
         rag_hits = result.get("rag_hits") or []
 
         yield {"type": "rag", "hits": [
-            {"path": h.get("relative_path"), "score": h.get("score")} for h in rag_hits
+            {"path": h.get("relative_path"), "score": h.get("score"),
+             "collection": h.get("collection")} for h in rag_hits
         ]}
+        # Replay the investigation so the UI can show the agent's reasoning (§9.13).
+        # (Live step-by-step streaming via graph.astream is a later enhancement; the
+        # foundation surfaces the full trace once the round completes.)
+        for h in result.get("hypotheses") or []:
+            yield {"type": "hypothesis", "hypothesis": h}
+        for step in result.get("investigation_log") or []:
+            yield {"type": "step", "step": step}
+        for ev in result.get("evidence") or []:
+            yield {"type": "evidence", "evidence": ev}
         yield {"type": "verdict", "verdict": verdict}
         if handoff:
             yield {"type": "handoff", "target": "sre_fixer", "payload": handoff}
@@ -111,8 +122,15 @@ def _render_assistant_text(verdict: dict, handed_off: bool) -> str:
     cls = verdict.get("classification", "needs_more_info")
     conf = verdict.get("confidence", 0)
     rationale = verdict.get("rationale", "")
+    root_cause = verdict.get("root_cause", "")
+    citations = verdict.get("citations", []) or []
     qs = verdict.get("questions", []) or []
-    parts = [f"Verdict: **{cls}** (confidence {conf:.0%})", "", rationale]
+    parts = [f"Verdict: **{cls}** (confidence {conf:.0%})", ""]
+    if root_cause:
+        parts += [f"**Root cause:** {root_cause}", ""]
+    parts.append(rationale)
+    if citations:
+        parts += ["", "Evidence: " + ", ".join(f"`{c}`" for c in citations[:8])]
     if qs:
         parts.append("")
         parts.append("Follow-up questions:")
@@ -147,6 +165,11 @@ async def _save_state(session, conversation_id: str, state: dict) -> None:
     keep = {
         "project_id": state.get("project_id"),
         "issue": state.get("issue"),
+        "facts": state.get("facts") or {},
+        "hypotheses": state.get("hypotheses") or [],
+        "evidence": state.get("evidence") or [],
+        "investigation_log": state.get("investigation_log") or [],
+        "budget": state.get("budget") or {},
         "classification_history": state.get("classification_history") or [],
         "followup_round": state.get("followup_round", 0),
         "rag_hits": state.get("rag_hits") or [],

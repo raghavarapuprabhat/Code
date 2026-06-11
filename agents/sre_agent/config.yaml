@@ -22,3 +22,27 @@ sre:
   max_followup_rounds: 3
   confidence_threshold: 0.7
   csv_max_rows: 500
+
+  # Agentic investigation loop (§9.5, §9.9). The loop stops on confidence, budget,
+  # or no-new-evidence — whichever comes first.
+  budget:
+    max_steps: 8           # investigation iterations (interactive)
+    max_tool_calls: 16
+    max_tokens: 60000      # advisory
+    batch:                 # tighter budget for CSV rows (§9.14)
+      max_steps: 3
+      max_tool_calls: 4
+
+  # Per-tool toggles (default on). Static read-only tools only in this foundation;
+  # live probes / observability adapters are added in later phases.
+  tools:
+    search_code_docs: true
+    get_doc: true
+    fetch_code_snippet: true
+    get_business_rules: true
+    get_call_graph: true
+    get_flow: true
+    grep_code: true
+    git_blame: true
+    git_log_recent: true
+    find_similar_issues: true

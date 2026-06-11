@@ -166,6 +166,22 @@ _SQLITE_DDL: list[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_key_achievement_date_squad ON key_achievement (snapshot_date, squad_name)",
+    """
+    CREATE TABLE IF NOT EXISTS sre_verdicts (
+        id                TEXT PRIMARY KEY,
+        project_id        TEXT,
+        conversation_id   TEXT,
+        error_signature   TEXT,
+        exception_type    TEXT,
+        component         TEXT,
+        classification    TEXT,
+        confidence        REAL,
+        root_cause        TEXT,
+        citations_json    TEXT,
+        created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_sre_verdicts_sig ON sre_verdicts (project_id, exception_type)",
 ]
 
 _initialized = False

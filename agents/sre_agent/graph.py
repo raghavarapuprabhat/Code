@@ -1,11 +1,17 @@
-"""LangGraph definition for the SRE Agent.
+"""LangGraph definition for the SRE Agent — agentic investigator (§9.5).
 
-A single graph invocation runs ONE triage round:
-   intake -> rag_search -> classify -> {handoff_fixer | close_not_bug | ask_followup}
+One graph invocation runs ONE triage round through the investigation loop:
 
-For interactive mode, the FastAPI router runs the graph repeatedly: the user's
-follow-up answer is appended to user_message and the graph re-runs, accumulating
-classification_history until confidence crosses the threshold or max rounds hit.
+    Understand(intake) -> Ground(rag_search) -> Hypothesize -> Investigate(ReAct)
+        -> Conclude(classify) -> {handoff_fixer | close_not_bug | ask_followup}
+
+For interactive multi-turn, the FastAPI layer re-invokes the graph with the prior
+state + the reporter's follow-up answer; hypotheses / evidence / budget survive across
+rounds (intake folds the answer in and refreshes the budget). `external` and `not_a_bug`
+close; `bug` (over threshold) hands off to the Fixer; everything else asks a follow-up.
+
+The graph's outer shape and the shipped config knobs (`confidence_threshold`,
+`max_followup_rounds`, `csv_max_rows`) are preserved (§9.15).
 """
 from __future__ import annotations
 
@@ -16,10 +22,16 @@ from typing import Any
 import yaml
 from langgraph.graph import END, StateGraph
 
-from .nodes.classify import classify_node
-from .nodes.decide import ask_followup_node, close_not_bug_node, handoff_fixer_node
-from .nodes.intake import intake_node
-from .nodes.rag_search import rag_search_node
+from .nodes import (
+    ask_followup_node,
+    classify_node,
+    close_not_bug_node,
+    handoff_fixer_node,
+    hypothesize_node,
+    intake_node,
+    investigate_node,
+    rag_search_node,
+)
 from .state import SREState
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yaml")
@@ -34,16 +46,20 @@ def build_graph(config: dict[str, Any] | None = None):
     cfg = config or load_config()
 
     g = StateGraph(SREState)
-    g.add_node("intake", partial(intake_node, config=cfg))
-    g.add_node("rag_search", partial(rag_search_node, config=cfg))
-    g.add_node("classify", partial(classify_node, config=cfg))
+    g.add_node("understand", partial(intake_node, config=cfg))
+    g.add_node("ground", partial(rag_search_node, config=cfg))
+    g.add_node("hypothesize", partial(hypothesize_node, config=cfg))
+    g.add_node("investigate", partial(investigate_node, config=cfg))
+    g.add_node("conclude", partial(classify_node, config=cfg))
     g.add_node("handoff_fixer", partial(handoff_fixer_node, config=cfg))
     g.add_node("close_not_bug", partial(close_not_bug_node, config=cfg))
     g.add_node("ask_followup", partial(ask_followup_node, config=cfg))
 
-    g.set_entry_point("intake")
-    g.add_edge("intake", "rag_search")
-    g.add_edge("rag_search", "classify")
+    g.set_entry_point("understand")
+    g.add_edge("understand", "ground")
+    g.add_edge("ground", "hypothesize")
+    g.add_edge("hypothesize", "investigate")
+    g.add_edge("investigate", "conclude")
 
     threshold = float(cfg["sre"].get("confidence_threshold", 0.7))
     max_rounds = int(cfg["sre"].get("max_followup_rounds", 3))
@@ -55,15 +71,15 @@ def build_graph(config: dict[str, Any] | None = None):
         rounds = int(state.get("followup_round", 0))
         if cls == "bug" and conf >= threshold:
             return "handoff_fixer"
-        if cls == "not_a_bug" and conf >= threshold:
+        if cls in {"not_a_bug", "external"} and conf >= threshold:
             return "close_not_bug"
         if rounds >= max_rounds:
-            # Out of follow-ups -> default to needs_more_info closure: surface verdict as-is.
-            return "close_not_bug" if cls == "not_a_bug" else "ask_followup"
+            # Out of follow-ups -> close best-effort rather than loop forever.
+            return "close_not_bug" if cls in {"not_a_bug", "external"} else "ask_followup"
         return "ask_followup"
 
     g.add_conditional_edges(
-        "classify",
+        "conclude",
         route,
         {
             "handoff_fixer": "handoff_fixer",
@@ -90,14 +106,17 @@ async def run_triage(
     project_id: str,
     user_message: str,
     prior_state: dict | None = None,
+    conversation_id: str | None = None,
 ) -> dict:
     """Run a single triage round. For multi-turn, pass the previous final state
-    back in via `prior_state` and append the user's reply to `user_message`."""
+    back in via `prior_state` and the reporter's reply as `user_message`."""
     cfg = load_config()
     g = build_graph(cfg)
     initial: SREState = dict(prior_state or {})
     initial.setdefault("project_id", project_id)
     initial["user_message"] = user_message
+    if conversation_id:
+        initial["conversation_id"] = conversation_id
     result = await g.ainvoke(initial)
     return dict(result)
 
@@ -107,7 +126,9 @@ async def triage_csv(
     project_id: str,
     rows: list[dict],
 ) -> list[dict]:
-    """Batch triage. Each row may contain: id, title, description, stack_trace, environment."""
+    """Batch triage. Each row runs the same loop under a tighter budget, no git/
+    callgraph/grep tools (§9.14). Each row may contain: id, title, description,
+    stack_trace, environment."""
     cfg = load_config()
     max_rows = int(cfg["sre"].get("csv_max_rows", 500))
     rows = rows[:max_rows]
@@ -126,6 +147,7 @@ async def triage_csv(
             "project_id": project_id,
             "issue": issue,
             "user_message": "",
+            "batch": True,
         }
         result = await g.ainvoke(state)
         verdict = result.get("verdict") or {}
@@ -135,10 +157,23 @@ async def triage_csv(
                 "title": issue["title"],
                 "verdict": verdict.get("classification"),
                 "confidence": verdict.get("confidence"),
+                "root_cause": verdict.get("root_cause", ""),
                 "rationale": verdict.get("rationale"),
-                "likely_files": ";".join(verdict.get("likely_files", [])),
+                "related_files": ";".join(verdict.get("likely_files", [])),
+                "regression_commit": _regression_from(result),
                 "suggested_owner": verdict.get("suggested_owner") or "",
                 "next_step": verdict.get("next_step"),
             }
         )
     return out
+
+
+def _regression_from(state: dict) -> str:
+    import re
+
+    for e in state.get("evidence", []) or []:
+        if e.get("source") == "git":
+            m = re.search(r"\b([0-9a-f]{7,40})\b", (e.get("citation", "") + " " + e.get("finding", "")))
+            if m:
+                return m.group(1)
+    return ""

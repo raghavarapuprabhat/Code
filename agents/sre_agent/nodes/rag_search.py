@@ -17,7 +17,10 @@ async def rag_search_node(state: SREState, *, config: dict) -> dict:
         return {"rag_hits": []}
 
     issue = state.get("issue") or {}
+    facts = state.get("facts") or {}
     query_parts = [
+        facts.get("error_signature", ""),
+        facts.get("component", "") or "",
         issue.get("title", ""),
         issue.get("description", ""),
         issue.get("stack_trace", "") or "",
@@ -30,5 +33,5 @@ async def rag_search_node(state: SREState, *, config: dict) -> dict:
         return {"rag_hits": []}
 
     hits = search_code_docs(project_id, query, n_results=int(cfg.get("rag_top_k", 6)))
-    logger.info("rag_search_done", project_id=project_id, hits=len(hits))
+    logger.info("ground_done", project_id=project_id, hits=len(hits))
     return {"rag_hits": hits}
