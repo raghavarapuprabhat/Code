@@ -44,12 +44,16 @@ def parse_stack_trace(text: str) -> dict:
     if not text or not text.strip():
         return {"exception_type": None, "message": "", "error_signature": "", "frames": []}
 
-    lines = text.splitlines()
+    _MAX_LINES = 4_000     # cap pre-processing to prevent OOM on adversarial payloads
+    _MAX_FRAMES = 50       # we only use the top few frames; cap for safety
+    lines = text.splitlines()[:_MAX_LINES]
     frames: list[Frame] = []
     exception_type: str | None = None
     message = ""
 
     for ln in lines:
+        if len(frames) >= _MAX_FRAMES:
+            break
         m = _JAVA_FRAME.match(ln) or _PY_FRAME.match(ln)
         if not m:
             m = _JS_FRAME.match(ln)

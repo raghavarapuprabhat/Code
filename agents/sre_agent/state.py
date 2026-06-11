@@ -133,6 +133,7 @@ class SREState(TypedDict, total=False):
     probe_log: list[dict]           # probe calls made (target, env, masked summary) for SSE
     steering: list[dict]            # v0.6 — pin/inject/kill actions from the user (§9.17.8)
     severity: dict                  # v0.6 — severity + blast_radius (§9.17.6)
+    repro_test: dict | None         # v0.6.3 — synthesized failing test {path,content,status,failure_excerpt}
 
 
 class RagHit(BaseModel):

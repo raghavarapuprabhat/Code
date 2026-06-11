@@ -19,6 +19,9 @@ async def handoff_fixer_node(state: SREState, *, config: dict) -> dict:
     regression_commit = _regression_commit(evidence)
     conv_id = state.get("conversation_id")
 
+    # v0.6.3: repro_test synthesized by synthesize_repro_node (None if disabled/skipped).
+    repro_test = state.get("repro_test")
+
     payload = {
         "project_id": state.get("project_id"),
         "issue": issue,
@@ -31,16 +34,20 @@ async def handoff_fixer_node(state: SREState, *, config: dict) -> dict:
         "repro": issue.get("repro_steps", ""),
         "confidence": verdict.get("confidence"),
         "conversation_link": f"/conversations/{conv_id}" if conv_id else None,
+        # v0.6.3: failing repro test for test-first Fixer mode.
+        "repro_test": repro_test,
         # Retained for backward compatibility with the shipped Fixer ContextLoad.
         "verdict": verdict,
         "likely_files": suspect,
         "rag_hits": state.get("rag_hits", []),
     }
+    repro_status = (repro_test or {}).get("status", "none")
     logger.info(
         "sre_handoff_fixer",
         confidence=verdict.get("confidence"),
         files=len(suspect),
         regression=regression_commit,
+        repro_test_status=repro_status,
     )
     return {"handoff": payload}
 

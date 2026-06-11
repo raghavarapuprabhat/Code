@@ -45,12 +45,26 @@ async def context_load_node(state: FixerState, *, config: dict) -> dict:
             ],
         }
 
-    logger.info("fixer_context_loaded", project_id=project_id, repo=repo_path)
-    return {
+    # v0.6.3: lift repro_test from the handoff packet so downstream nodes can see it.
+    handoff = state.get("handoff") or {}
+    repro_test = state.get("repro_test") or handoff.get("repro_test")
+    repro_status = (repro_test or {}).get("status", "none")
+
+    logger.info(
+        "fixer_context_loaded",
+        project_id=project_id,
+        repo=repo_path,
+        repro_test_status=repro_status,
+    )
+    out: dict = {
         "repo_path": repo_path,
         "attempt": int(state.get("attempt", 0)) + 1,
         "status": "planning",
         "audit_trail": (state.get("audit_trail") or []) + [
-            {"step": "context_load", "status": "ok", "repo_path": repo_path}
+            {"step": "context_load", "status": "ok", "repo_path": repo_path,
+             "repro_test_status": repro_status}
         ],
     }
+    if repro_test is not None:
+        out["repro_test"] = repro_test
+    return out

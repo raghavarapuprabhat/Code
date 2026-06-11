@@ -31,6 +31,7 @@ from .nodes import (
     intake_node,
     investigate_node,
     rag_search_node,
+    synthesize_repro_node,
 )
 from .nodes.ask_user import ask_user_node
 from .state import SREState
@@ -56,6 +57,7 @@ def build_graph(config: dict[str, Any] | None = None, *, checkpointer=None):
     g.add_node("investigate", partial(investigate_node, config=cfg))
     g.add_node("ask_user", partial(ask_user_node, config=cfg))
     g.add_node("conclude", partial(classify_node, config=cfg))
+    g.add_node("synthesize_repro", partial(synthesize_repro_node, config=cfg))
     g.add_node("handoff_fixer", partial(handoff_fixer_node, config=cfg))
     g.add_node("close_not_bug", partial(close_not_bug_node, config=cfg))
     g.add_node("ask_followup", partial(ask_followup_node, config=cfg))
@@ -77,6 +79,7 @@ def build_graph(config: dict[str, Any] | None = None, *, checkpointer=None):
 
     threshold = float(cfg["sre"].get("confidence_threshold", 0.7))
     max_rounds = int(cfg["sre"].get("max_followup_rounds", 3))
+    do_repro = bool((cfg["sre"].get("handoff", {}) or {}).get("synthesize_repro_test", True))
 
     def route(state: SREState) -> str:
         v = state.get("verdict") or {}
@@ -84,11 +87,11 @@ def build_graph(config: dict[str, Any] | None = None, *, checkpointer=None):
         conf = float(v.get("confidence") or 0.0)
         rounds = int(state.get("followup_round", 0))
         if cls == "bug" and conf >= threshold:
-            return "handoff_fixer"
+            # v0.6.3: synthesize a repro test before handing off (config-gated).
+            return "synthesize_repro" if do_repro else "handoff_fixer"
         if cls in {"not_a_bug", "external"} and conf >= threshold:
             return "close_not_bug"
         if rounds >= max_rounds:
-            # Out of follow-ups -> close best-effort rather than loop forever.
             return "close_not_bug" if cls in {"not_a_bug", "external"} else "ask_followup"
         return "ask_followup"
 
@@ -96,11 +99,13 @@ def build_graph(config: dict[str, Any] | None = None, *, checkpointer=None):
         "conclude",
         route,
         {
+            "synthesize_repro": "synthesize_repro",
             "handoff_fixer": "handoff_fixer",
             "close_not_bug": "close_not_bug",
             "ask_followup": "ask_followup",
         },
     )
+    g.add_edge("synthesize_repro", "handoff_fixer")  # repro result folds into handoff
     g.add_edge("handoff_fixer", END)
     g.add_edge("close_not_bug", END)
     g.add_edge("ask_followup", END)
@@ -153,11 +158,30 @@ async def triage_csv(
     project_id: str,
     rows: list[dict],
 ) -> list[dict]:
-    """Batch triage. Each row runs the same loop under a tighter budget, no git/
-    callgraph/grep tools (§9.14). Each row may contain: id, title, description,
-    stack_trace, environment."""
+    """Batch triage with optional clustering (§9.17.2). Each row (or cluster rep)
+    runs the same loop under a tighter budget, no git/callgraph/grep/probes (§9.14).
+    Row format: id, title, description, stack_trace, environment (extras ignored).
+    Output adds: root_cause, related_files, regression_commit, cluster_id,
+    cluster_size, representative."""
+    from .batch import triage_with_clustering
+
     cfg = load_config()
-    max_rows = int(cfg["sre"].get("csv_max_rows", 500))
+    sre_cfg = cfg.get("sre", {}) or {}
+    use_clustering = (sre_cfg.get("batch", {}) or {}).get("cluster", True)
+
+    if use_clustering and len(rows) > 3:
+        clustered = await triage_with_clustering(
+            project_id=project_id,
+            rows=rows,
+            config=cfg,
+            build_graph_fn=build_graph,
+            load_config_fn=load_config,
+        )
+        if clustered:
+            return clustered  # clustering succeeded; use its output
+
+    # Flat per-row fallback (clustering disabled or too few rows).
+    max_rows = int(sre_cfg.get("csv_max_rows", 500))
     rows = rows[:max_rows]
     g = build_graph(cfg)
     out: list[dict] = []

@@ -1,10 +1,13 @@
 """Phase 4 — run the project's test suite via the whitelisted command."""
 from __future__ import annotations
 
+import os
+
 import structlog
 
 from ..state import FixerState
 from ..tools.test_runner import (
+    RunOutcome,
     TestRunnerSafetyError,
     detect_command_key,
     run_tests,
@@ -12,6 +15,25 @@ from ..tools.test_runner import (
 )
 
 logger = structlog.get_logger()
+
+
+def _check_repro_test(repro_rel_path: str, outcome: RunOutcome) -> dict:
+    """Determine whether the repro test is now green by scanning the test output."""
+    import re as _re
+    # The test file base name is the most reliable token (pytest uses it in output).
+    test_name = os.path.basename(repro_rel_path)
+    combined = (outcome.stdout + "\n" + outcome.stderr)
+    # pytest marks passing: "PASSED" or "1 passed"; failing: listed in failed_tests.
+    green = (
+        outcome.passed
+        and test_name not in " ".join(outcome.failed_tests)
+        and bool(_re.search(r"passed", combined, _re.IGNORECASE))
+    )
+    return {
+        "path": repro_rel_path,
+        "green": green,
+        "in_failed_list": test_name in " ".join(outcome.failed_tests),
+    }
 
 
 async def run_tests_node(state: FixerState, *, config: dict) -> dict:
@@ -48,6 +70,12 @@ async def run_tests_node(state: FixerState, *, config: dict) -> dict:
             ],
         }
 
+    # v0.6.3: check repro test health when test-first mode is active.
+    repro_test = state.get("repro_test")
+    repro_result: dict | None = None
+    if repro_test and repro_test.get("status") in ("red", "unverified") and repro_test.get("path"):
+        repro_result = _check_repro_test(repro_test["path"], outcome)
+
     result = {
         "passed": outcome.passed,
         "command": outcome.command,
@@ -63,17 +91,22 @@ async def run_tests_node(state: FixerState, *, config: dict) -> dict:
         passed=outcome.passed,
         duration_ms=outcome.duration_ms,
         failed=len(outcome.failed_tests),
+        repro_green=repro_result.get("green") if repro_result else None,
     )
-    return {
+    audit_entry: dict = {
+        "step": "run_tests",
+        "status": "ok" if outcome.passed else "failed",
+        "duration_ms": outcome.duration_ms,
+        "failed_tests": outcome.failed_tests[:10],
+    }
+    if repro_result:
+        audit_entry["repro_test"] = repro_result
+    out: dict = {
         "last_test": result,
         "test_history": test_history,
         "status": "tests_passed" if outcome.passed else "tests_failed",
-        "audit_trail": (state.get("audit_trail") or []) + [
-            {
-                "step": "run_tests",
-                "status": "ok" if outcome.passed else "failed",
-                "duration_ms": outcome.duration_ms,
-                "failed_tests": outcome.failed_tests[:10],
-            }
-        ],
+        "audit_trail": (state.get("audit_trail") or []) + [audit_entry],
     }
+    if repro_result:
+        out["repro_test_result"] = repro_result
+    return out

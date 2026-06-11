@@ -50,6 +50,10 @@ class FixerState(TypedDict, total=False):
 
     branch_name: str
     pr: dict                                   # PRInfo
+    # v0.6 — repro test (§9.17.3): synthesized by the SRE agent before handoff.
+    # When present the Fixer is test-first: the red test must go green before branch/PR.
+    repro_test: dict | None                    # {path, content, status, failure_excerpt}
+    repro_test_result: dict | None             # first run of repro test (confirms it fails)
 
     status: Literal["planning", "applied", "tests_failed", "tests_passed",
                     "branch_created", "pr_opened", "raised_human", "error"]

@@ -15,7 +15,15 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from app.services.sre_service import steer_triage, stream_triage, triage_csv_text
+from app.services.sre_service import (
+    file_ado_bug,
+    get_calibration_stats,
+    record_verdict_outcome,
+    run_verify_fix,
+    steer_triage,
+    stream_triage,
+    triage_csv_text,
+)
 
 router = APIRouter()
 
@@ -80,6 +88,85 @@ async def steer(conversation_id: str, body: SteerRequest):
         hypothesis_id=body.hypothesis_id,
         statement=body.statement,
     )
+
+
+class OutcomeRequest(BaseModel):
+    project_id: str
+    classification: str               # bug | not_a_bug | external | needs_more_info
+    confidence: float
+    outcome: str                      # confirmed | overturned | unresolved
+    outcome_source: str               # human_review | pr_merged | verify_fix | ado_state
+    root_cause_final: str = ""
+
+
+class VerifyFixRequest(BaseModel):
+    project_id: str
+    pr_url: str | None = None
+
+
+class AdoFileRequest(BaseModel):
+    project_id: str
+    dry_run: bool = False
+
+
+@router.post("/verdicts/{conversation_id}/ado-file")
+async def ado_file(conversation_id: str, body: AdoFileRequest):
+    """File (or dry-run) an ADO Bug for a confirmed verdict (§9.17.7).
+
+    Set dry_run=true to preview without actually creating a work item.
+    Requires sre.ado_writeback.enabled=true in config AND ADO_PROJECT env var.
+    """
+    return await file_ado_bug(
+        conversation_id=conversation_id,
+        project_id=body.project_id,
+        dry_run=body.dry_run,
+    )
+
+
+@router.post("/verdicts/{conversation_id}/outcome")
+async def record_outcome(conversation_id: str, body: OutcomeRequest):
+    """Record a verdict outcome from any feedback channel (§9.17.5).
+
+    outcome_source values: human_review | pr_merged | verify_fix | ado_state
+    outcome values: confirmed | overturned | unresolved
+    """
+    if body.outcome not in {"confirmed", "overturned", "unresolved"}:
+        raise HTTPException(400, "outcome must be confirmed | overturned | unresolved")
+    if body.outcome_source not in {"human_review", "pr_merged", "verify_fix", "ado_state"}:
+        raise HTTPException(400, "outcome_source must be human_review | pr_merged | verify_fix | ado_state")
+    return await record_verdict_outcome(
+        conversation_id=conversation_id,
+        project_id=body.project_id,
+        classification=body.classification,
+        confidence=body.confidence,
+        outcome=body.outcome,
+        outcome_source=body.outcome_source,
+        root_cause_final=body.root_cause_final,
+    )
+
+
+@router.get("/calibration/{project_id}")
+async def calibration(project_id: str):
+    """Brier score + calibration bands for a project (§9.17.5).
+
+    Lower Brier score = better confidence calibration.
+    """
+    if not project_id:
+        raise HTTPException(400, "project_id is required")
+    return await get_calibration_stats(project_id=project_id)
+
+
+@router.post("/triage/{conversation_id}/verify-fix")
+async def verify_fix(conversation_id: str, body: VerifyFixRequest):
+    """Re-run original probes after fix deploys; confirm symptoms resolved (§9.17.4)."""
+    if not body.project_id:
+        raise HTTPException(400, "project_id is required")
+    result = await run_verify_fix(
+        conversation_id=conversation_id,
+        project_id=body.project_id,
+        pr_url=body.pr_url,
+    )
+    return result
 
 
 @router.post("/triage-csv")

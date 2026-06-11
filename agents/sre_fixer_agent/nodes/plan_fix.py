@@ -54,11 +54,16 @@ async def plan_fix_node(state: FixerState, *, config: dict) -> dict:
             "failure_analysis": failure_analysis or "",
         }, indent=2)[:18000]
 
+    # v0.6.3: test-first context — include repro test when status is red/unverified.
+    repro_test = state.get("repro_test")
+    repro_block = _render_repro_block(repro_test)
+
     prompt = template.format(
         allowed_test_keys=", ".join(cfg["test_commands"].keys()),
         verdict_json=json.dumps({"issue": handoff.get("issue"), "verdict": verdict}, indent=2),
         files_block="\n\n".join(files_block_parts),
         previous_attempt_block=prev_block,
+        repro_test_block=repro_block,
     )
     resp = await llm.chat([{"role": "user", "content": prompt}])
     plan = _safe_json(resp.content)
@@ -88,6 +93,31 @@ async def plan_fix_node(state: FixerState, *, config: dict) -> dict:
             {"step": "plan_fix", "status": "ok", "edits": len(plan["edits"])}
         ],
     }
+
+
+def _render_repro_block(repro_test: dict | None) -> str:
+    """Format the repro test for inclusion in the plan_fix prompt."""
+    if not repro_test:
+        return "(no repro test — proceed without test-first constraint)"
+    status = repro_test.get("status", "skip")
+    if status == "skip":
+        return "(repro test synthesis was skipped — no test-first constraint)"
+    path = repro_test.get("path") or "(unknown path)"
+    content = repro_test.get("content") or ""
+    excerpt = repro_test.get("failure_excerpt") or ""
+    lines = [
+        f"A failing repro test has been synthesized (status={status!r}).",
+        f"Test file path: {path}",
+        "",
+        "You MUST include this file as one of your edits (write it to the repo).",
+        "Your fix must make this test GREEN without modifying or disabling it.",
+        "",
+        "Repro test content:",
+        f"```python\n{content[:8000]}\n```",
+    ]
+    if excerpt:
+        lines += ["", "Failure excerpt from dry-run:", f"```\n{excerpt[:600]}\n```"]
+    return "\n".join(lines)
 
 
 def _safe_json(text: str):

@@ -136,10 +136,27 @@ async def classify_node(state: SREState, *, config: dict) -> dict:
             verdict=parsed,
         )
 
+    # v0.6.6: deterministic severity + blast-radius for confirmed bugs (§9.17.6).
+    severity: dict = {}
+    if parsed.get("classification") == "bug" and state.get("project_id"):
+        try:
+            from .severity import estimate_impact
+            severity = await estimate_impact(
+                project_id=state["project_id"],
+                verdict=parsed,
+                evidence=evidence,
+                facts=facts,
+                config=config,
+            )
+            logger.info("severity_done", level=severity.get("level"), hotspot=severity.get("hotspot_score"))
+        except Exception:  # noqa: BLE001 — severity is advisory; never fatal
+            pass
+
     return {
         "verdict": parsed,
         "classification_history": new_history,
         "followup_round": int(state.get("followup_round", 0)),
+        "severity": severity,
     }
 
 

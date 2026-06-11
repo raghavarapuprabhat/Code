@@ -157,6 +157,96 @@ async def triage_csv_text(*, project_id: str, csv_bytes: bytes) -> dict:
     return {"count": len(out_rows), "rows": out_rows}
 
 
+async def record_verdict_outcome(
+    *,
+    conversation_id: str,
+    project_id: str,
+    classification: str,
+    confidence: float,
+    outcome: str,
+    outcome_source: str,
+    root_cause_final: str = "",
+) -> dict:
+    """Record a verdict outcome (feedback channel) for calibration (§9.17.5)."""
+    from agents.sre_agent.calibration import record_outcome
+
+    async with get_session() as session:
+        return await record_outcome(
+            session=session,
+            conversation_id=conversation_id,
+            project_id=project_id,
+            classification=classification,
+            confidence=confidence,
+            outcome=outcome,
+            outcome_source=outcome_source,
+            root_cause_final=root_cause_final,
+        )
+
+
+async def file_ado_bug(
+    *,
+    conversation_id: str,
+    project_id: str,
+    dry_run: bool = False,
+) -> dict:
+    """File (or dry-run) an ADO Bug for the given triage conversation (§9.17.7)."""
+    from agents.sre_agent.ado_writeback import file_bug
+    from agents.sre_agent.graph import get_interactive_graph
+
+    cfg = _load_sre_config()
+    app = get_interactive_graph()
+    gcfg = {"configurable": {"thread_id": conversation_id}}
+    try:
+        snap = await app.aget_state(gcfg)
+        state = dict(snap.values or {}) if snap else {}
+    except Exception:  # noqa: BLE001
+        state = {}
+
+    verdict = state.get("verdict") or {}
+    issue = state.get("issue") or {}
+    evidence = state.get("evidence") or []
+    severity = state.get("severity") or {}
+    facts = state.get("facts") or {}
+
+    return await file_bug(
+        conversation_id=conversation_id,
+        project_id=project_id,
+        verdict=verdict,
+        issue=issue,
+        evidence=evidence,
+        severity=severity,
+        config=cfg,
+        error_signature=facts.get("error_signature", ""),
+        dry_run=dry_run,
+    )
+
+
+async def get_calibration_stats(*, project_id: str) -> dict:
+    """Brier score + calibration bands for a project (§9.17.5)."""
+    from agents.sre_agent.calibration import get_calibration
+
+    async with get_session() as session:
+        return await get_calibration(session=session, project_id=project_id)
+
+
+async def run_verify_fix(
+    *,
+    conversation_id: str,
+    project_id: str,
+    pr_url: str | None = None,
+) -> dict:
+    """Re-probe after fix deploys; confirm symptoms resolved (§9.17.4)."""
+    from agents.sre_agent.verify_graph import run_verify_fix as _run
+
+    cfg = _load_sre_config()
+    return await _run(
+        conversation_id=conversation_id,
+        project_id=project_id,
+        pr_url=pr_url,
+        config=cfg,
+    )
+
+
 def _render_assistant_text(verdict: dict, handed_off: bool) -> str:
     cls = verdict.get("classification", "needs_more_info")
     conf = verdict.get("confidence", 0)

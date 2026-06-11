@@ -119,6 +119,7 @@ async def investigate_node(state: SREState, *, config: dict) -> dict:
         "prod_approved": bool(state.get("prod_probe_approved")),
         "adhoc_targets": state.get("adhoc_targets") or [],
         "environments_path": (sre_cfg.get("probes", {}) or {}).get("environments_path") or None,
+        "observability": sre_cfg.get("observability", {}) or {},
     }
 
     llm = build_adapter_from_config(config)

@@ -86,6 +86,50 @@ class ADOMCPClient:
             res = await s.call_tool("workitems_update", arguments=args)
             return _extract_json(res)
 
+    async def create_workitem(
+        self,
+        *,
+        project: str,
+        work_item_type: str = "Bug",
+        title: str,
+        description: str = "",
+        tags: list[str] | None = None,
+        area_path: str | None = None,
+        assigned_to: str | None = None,
+        priority: int = 2,
+    ) -> dict[str, Any]:
+        """Create a new work item (Bug by default) in the given project."""
+        async with self.session() as s:
+            fields: dict[str, Any] = {
+                "System.Title": title,
+                "System.WorkItemType": work_item_type,
+                "Microsoft.VSTS.Common.Priority": priority,
+            }
+            if description:
+                fields["System.Description"] = description
+            if tags:
+                fields["System.Tags"] = "; ".join(tags)
+            if area_path:
+                fields["System.AreaPath"] = area_path
+            if assigned_to:
+                fields["System.AssignedTo"] = assigned_to
+            args: dict[str, Any] = {
+                "project": project,
+                "type": work_item_type,
+                "fields": fields,
+            }
+            res = await s.call_tool("workitems_create", arguments=args)
+            return _extract_json(res)
+
+    async def search_workitems(self, *, project: str, wiql: str) -> list[dict[str, Any]]:
+        """Run a WIQL query to search for existing work items."""
+        async with self.session() as s:
+            res = await s.call_tool("workitems_search_wiql", arguments={"project": project, "query": wiql})
+            result = _extract_json(res)
+            if isinstance(result, dict):
+                return result.get("workItems") or result.get("value") or []
+            return result or []
+
     async def list_iterations(self, *, project: str, team: str | None = None) -> list[dict[str, Any]]:
         async with self.session() as s:
             args: dict[str, Any] = {"project": project}
