@@ -10,7 +10,7 @@ from typing import Literal
 
 from sqlalchemy import text
 
-from shared.docs import markdown_to_confluence_html, markdown_to_html
+from shared.docs import markdown_to_confluence_html, markdown_to_html, strip_req_markers
 from shared.storage import get_session, iso_ts
 
 DocFormat = Literal["markdown", "html", "confluence"]
@@ -71,7 +71,10 @@ async def get_doc(project_id: str, doc_id: str, fmt: DocFormat = "markdown") -> 
     if not row:
         return None
 
-    content_md = row.content_md
+    # v0.7: strip <req-content> provenance markers at render time (§8.9.1). They are
+    # preserved in the stored markdown + Chroma chunks so the SRE Agent sees requirement
+    # provenance; readers get clean prose.
+    content_md = strip_req_markers(row.content_md)
     if fmt == "confluence":
         content = markdown_to_confluence_html(content_md)
     elif fmt == "html":

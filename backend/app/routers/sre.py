@@ -16,8 +16,10 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from app.services.sre_service import (
+    claim_answer,
     file_ado_bug,
     get_calibration_stats,
+    get_conversation_state,
     record_verdict_outcome,
     run_verify_fix,
     steer_triage,
@@ -68,13 +70,27 @@ async def triage(body: TriageRequest):
 
 @router.post("/triage/{conversation_id}/answer")
 async def answer(conversation_id: str, body: AnswerRequest):
-    """Resume a paused investigation with the user's answer to a mid-loop question (§9.7B)."""
+    """Resume a paused investigation with the user's answer (§9.7B v0.7).
+
+    Concurrency: the first answer wins — a compare-and-set flips paused → running. A
+    second `/answer` for the same paused question returns 409 Conflict.
+    """
+    claimed = await claim_answer(conversation_id)
+    if not claimed:
+        raise HTTPException(409, "conversation is not awaiting an answer (already answered or not paused)")
     return _sse(stream_triage(
         project_id=body.project_id or "",
         user_message=body.answer,
         conversation_id=conversation_id,
         user_id=body.user_id,
     ))
+
+
+@router.get("/triage/{conversation_id}")
+async def triage_state(conversation_id: str):
+    """Conversation lifecycle state for UI re-hydration (§9.7B v0.7):
+    running | paused | concluded | expired (+ the open question when paused)."""
+    return await get_conversation_state(conversation_id)
 
 
 @router.post("/triage/{conversation_id}/steer")

@@ -53,11 +53,11 @@ function ProjectCard({ project, onReindex }: { project: CodeProject; onReindex: 
           </button>
           {indexed && (
             <button
-              onClick={() => navigate(`/docs/${project.id}`)}
+              onClick={() => navigate(`/projects/${project.id}`)}
               className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs text-primary-foreground hover:bg-primary/90 transition-colors"
             >
               <ExternalLink className="h-3 w-3" />
-              View docs
+              Open project
             </button>
           )}
         </div>

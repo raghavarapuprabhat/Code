@@ -9,7 +9,10 @@ from shared.storage import get_session, iso_ts, portable_sql
 from app.services.code_doc_service import (
     get_digest,
     get_latest_eval,
+    get_latest_run,
+    get_traceability,
     record_doc_feedback,
+    record_wrong_trace_link,
     run_eval,
     set_requirements_areapath,
     trigger_indexing,
@@ -34,6 +37,13 @@ class FeedbackRequest(BaseModel):
     section: str | None = None
     rating: int          # 1 (down) .. 5 (up)
     comment: str | None = None
+
+
+class WrongLinkRequest(BaseModel):
+    workitem_id: str
+    target_kind: str     # component | rule | endpoint | test
+    target_ref: str
+    method: str = "unknown"
 
 
 @router.post("/index")
@@ -101,6 +111,27 @@ async def run_doc_eval(project_id: str):
 async def latest_eval(project_id: str):
     """Latest eval score for the Hub badge (§8.9.3)."""
     return await get_latest_eval(project_id=project_id)
+
+
+@router.get("/projects/{project_id}/runs/latest")
+async def latest_run(project_id: str):
+    """Run-status strip data: timing, coverage, gaps, errors (§13B.1 v0.7)."""
+    return await get_latest_run(project_id=project_id)
+
+
+@router.get("/projects/{project_id}/trace")
+async def traceability(project_id: str):
+    """Structured requirements traceability matrix for the TraceabilityPage (§13B.3 v0.7)."""
+    return await get_traceability(project_id=project_id)
+
+
+@router.post("/projects/{project_id}/trace/wrong-link")
+async def trace_wrong_link(project_id: str, body: WrongLinkRequest):
+    """"Wrong link" 👎 vote on the traceability matrix — feeds trace_eval_links (§8.9.1 v0.7)."""
+    return await record_wrong_trace_link(
+        project_id=project_id, workitem_id=body.workitem_id,
+        target_kind=body.target_kind, target_ref=body.target_ref, method=body.method,
+    )
 
 
 @router.post("/projects/{project_id}/docs/{doc_id}/feedback")

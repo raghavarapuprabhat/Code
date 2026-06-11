@@ -206,6 +206,19 @@ _SQLITE_DDL: list[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_verdict_outcomes_proj ON verdict_outcomes (project_id)",
+    # SRE conversation state (architecture §9.7B v0.7) — drives GET /triage/{id} and the
+    # 24h paused-checkpoint TTL sweeper. One row per triage conversation.
+    """
+    CREATE TABLE IF NOT EXISTS sre_conversation_state (
+        conversation_id  TEXT PRIMARY KEY,
+        project_id       TEXT,
+        state            TEXT NOT NULL,   -- running | paused | concluded | expired
+        pending_question TEXT,            -- JSON of the open PendingQuestion when paused
+        paused_at        TEXT,            -- when the interrupt fired (for TTL)
+        updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_sre_conv_state ON sre_conversation_state (state)",
     # --- Code Doc Agent v0.5 (§8.9) ---
     # Architecture drift digest (§8.9.4) — append-only per re-index.
     """
@@ -282,6 +295,38 @@ _SQLITE_DDL: list[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_dep_findings_proj ON dependency_findings (project_id, created_at)",
+    # Code Doc index-run metadata (architecture §13B.1 v0.7) — powers the run-status strip.
+    """
+    CREATE TABLE IF NOT EXISTS code_doc_runs (
+        id            TEXT PRIMARY KEY,
+        project_id    TEXT NOT NULL,
+        mode          TEXT,
+        files_indexed INTEGER,
+        summaries     INTEGER,
+        gap_count     INTEGER,
+        error_count   INTEGER,
+        errors_json   TEXT,
+        model_hash    TEXT,
+        duration_ms   INTEGER,
+        status        TEXT,             -- ok | error
+        created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_code_doc_runs_proj ON code_doc_runs (project_id, created_at)",
+    # TraceLink quality eval set (architecture §8.9.1 v0.7) — labeled requirement↔code links.
+    """
+    CREATE TABLE IF NOT EXISTS trace_eval_links (
+        project_id   TEXT NOT NULL,
+        workitem_id  TEXT NOT NULL,
+        target_kind  TEXT NOT NULL,     -- component | rule | endpoint | test
+        target_ref   TEXT NOT NULL,
+        label        INTEGER,           -- 1 = correct link, 0 = known-wrong distractor
+        source       TEXT,              -- hand_labeled | feedback
+        method       TEXT,              -- lexical | semantic | llm (tier that produced the link)
+        created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (project_id, workitem_id, target_kind, target_ref)
+    )
+    """,
 ]
 
 _initialized = False

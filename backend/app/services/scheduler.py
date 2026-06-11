@@ -6,6 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.services.ado_md_service import trigger_etl
+from app.services.sre_service import sweep_expired_questions
 
 logger = structlog.get_logger()
 
@@ -27,6 +28,16 @@ async def _md_etl_job() -> None:
         logger.exception("scheduled_md_etl_failed", err=str(e))
 
 
+async def _sre_question_sweep_job() -> None:
+    """Expire paused SRE triage checkpoints past their TTL (§9.7B v0.7)."""
+    try:
+        result = await sweep_expired_questions()
+        if result.get("expired"):
+            logger.info("scheduled_sre_sweep_done", **result)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("scheduled_sre_sweep_failed", err=str(e))
+
+
 def start_scheduler() -> None:
     sched = get_scheduler()
     if sched.running:
@@ -38,6 +49,14 @@ def start_scheduler() -> None:
         id="ado_md_etl_daily",
         replace_existing=True,
         misfire_grace_time=3600,
+    )
+    # Hourly sweep of abandoned paused triage questions (24h TTL → needs_more_info).
+    sched.add_job(
+        _sre_question_sweep_job,
+        CronTrigger(minute=15),
+        id="sre_question_ttl_sweep",
+        replace_existing=True,
+        misfire_grace_time=1800,
     )
     sched.start()
     logger.info("scheduler_started", jobs=[j.id for j in sched.get_jobs()])

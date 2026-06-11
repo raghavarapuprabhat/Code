@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { FileText } from "lucide-react";
+import { useMemo, useState } from "react";
+import { FileText, Search } from "lucide-react";
 import type { CodeProject, DocSummary } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -14,11 +14,13 @@ interface Props {
 }
 
 const AUDIENCE_LABEL: Record<string, string> = {
+  start: "Start here",
   management: "Management",
   architecture: "Architecture",
   developer: "Developer",
 };
-const AUDIENCE_ORDER = ["management", "architecture", "developer"];
+// "Start here" (onboarding) pinned first, then management/architecture/developer (§13B.2).
+const AUDIENCE_ORDER = ["start", "management", "architecture", "developer"];
 
 export function DocTree({
   projects,
@@ -29,10 +31,15 @@ export function DocTree({
   onSelectDoc,
   loadingDocs,
 }: Props) {
+  const [filter, setFilter] = useState("");
+
   const grouped = useMemo(() => {
+    const f = filter.trim().toLowerCase();
+    const visible = f ? docs.filter((d) => d.title.toLowerCase().includes(f)) : docs;
     const by: Record<string, DocSummary[]> = {};
-    for (const d of [...docs].sort((a, b) => a.sort_order - b.sort_order)) {
-      const key = d.audience || "developer";
+    for (const d of [...visible].sort((a, b) => a.sort_order - b.sort_order)) {
+      // Pin the onboarding doc into a dedicated "Start here" group (§8.9.8 / §13B.2).
+      const key = d.doc_id === "14_onboarding" ? "start" : d.audience || "developer";
       (by[key] ??= []).push(d);
     }
     const keys = Object.keys(by).sort(
@@ -40,7 +47,7 @@ export function DocTree({
         (AUDIENCE_ORDER.indexOf(a) + 1 || 99) - (AUDIENCE_ORDER.indexOf(b) + 1 || 99),
     );
     return keys.map((k) => ({ audience: k, docs: by[k] }));
-  }, [docs]);
+  }, [docs, filter]);
 
   return (
     <aside className="flex h-full w-72 flex-col border-r bg-surface">
@@ -63,6 +70,20 @@ export function DocTree({
           ))}
         </select>
       </div>
+
+      {selectedProjectId && docs.length > 0 && (
+        <div className="border-b p-2">
+          <div className="flex items-center gap-1.5 rounded-md border bg-background px-2 py-1">
+            <Search className="h-3.5 w-3.5 text-muted" />
+            <input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter documents…"
+              className="w-full bg-transparent text-xs outline-none"
+            />
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-2">
         {loadingDocs && <p className="p-2 text-sm text-muted">Loading documents…</p>}

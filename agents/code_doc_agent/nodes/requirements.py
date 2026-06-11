@@ -69,28 +69,44 @@ async def _ingest_work_items(areapath: str) -> list[dict]:
 
 def _build_matrix(items: list[dict], components: list[dict],
                   summaries: dict[str, dict]) -> dict:
-    """Link work items → components → rules → tests; flag gaps."""
+    """Link work items → components → rules → tests; flag gaps.
+
+    Each produced link is also recorded in a flat ``links`` list tagged with its
+    ``method`` tier (currently the deterministic lexical matcher), so the TraceLink eval
+    (§8.9.1 v0.7) can score precision/recall per tier against the labeled set.
+    """
     matrix = []
+    links: list[dict] = []
     traced_components: set[str] = set()
     for wi in items:
+        wid = wi["work_item_id"]
         text = f"{wi.get('title','')} {wi.get('description','')}"
         comps = _match_components(text, components)
         traced_components.update(comps)
+        for c in comps:
+            links.append({"workitem_id": wid, "target_kind": "component",
+                          "target_ref": c, "method": "lexical"})
         # Business rules whose description overlaps the work item.
         wi_kw = _keywords(text)
         rules = []
         for path, s in summaries.items():
             for r in s.get("business_rules", []):
                 if _keywords(r.get("description", "")) & wi_kw:
-                    rules.append(f"{path}: {r.get('description','')[:60]}")
+                    ref = f"{path}: {r.get('description','')[:60]}"
+                    rules.append(ref)
+                    links.append({"workitem_id": wid, "target_kind": "rule",
+                                  "target_ref": ref, "method": "lexical"})
         # crude test match: a test file mentioning a component keyword.
         tests = [p for p in summaries if "test" in p.lower()
                  and _keywords(p) & wi_kw][:5]
+        for t in tests:
+            links.append({"workitem_id": wid, "target_kind": "test",
+                          "target_ref": t, "method": "lexical"})
         status = "implemented" if comps else "unimplemented"
         if comps and not rules:
             status = "partial"
         matrix.append({
-            "work_item_id": wi["work_item_id"],
+            "work_item_id": wid,
             "title": wi["title"],
             "wi_type": wi["wi_type"],
             "state": wi["state"],
@@ -102,7 +118,7 @@ def _build_matrix(items: list[dict], components: list[dict],
 
     all_components = {c.get("name", "") for c in components}
     untraced = sorted(all_components - traced_components)
-    return {"matrix": matrix, "untraced_components": untraced}
+    return {"matrix": matrix, "untraced_components": untraced, "links": links}
 
 
 def _embed_requirements(pid: str, items: list[dict]) -> None:
@@ -174,10 +190,21 @@ async def requirements_node(state: CodeDocState, *, config: dict) -> dict:
     _embed_requirements(state["project_id"], items)
     await _persist_trace(state["project_id"], matrix)
 
+    # v0.7: score the produced links per method tier against the labeled set (§8.9.1).
+    trace_eval = {}
+    try:
+        from .trace_eval import evaluate_trace_links
+        trace_eval = await evaluate_trace_links(
+            project_id=state["project_id"], produced_links=matrix.get("links", []),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("trace_eval_failed", err=str(exc))
+
     logger.info(
         "requirements_done",
         items=len(items),
         traced=len(matrix["matrix"]),
         untraced=len(matrix["untraced_components"]),
+        trace_scored=trace_eval.get("scored"),
     )
-    return {"requirements": items, "traceability": matrix}
+    return {"requirements": items, "traceability": matrix, "trace_eval": trace_eval}

@@ -52,6 +52,7 @@ def _build_description(
     conversation_id: str,
     repro: str,
     severity: dict,
+    deployments_enabled: bool = False,
 ) -> str:
     lines = [
         "<h3>Root Cause</h3>",
@@ -71,6 +72,15 @@ def _build_description(
     ]
     if repro:
         lines += ["<h3>Repro Steps</h3>", f"<pre>{repro[:1000]}</pre>"]
+    # v0.7: verify-after-fix instructions (§9.17.4) — manual trigger when deploys aren't tracked.
+    lines.append("<h3>Verification</h3>")
+    if deployments_enabled:
+        lines.append("<p>Deploy tracking enabled — verification auto-triggers on deploy.</p>")
+    else:
+        lines.append(
+            "<p>Deploy tracking unavailable — after the fix reaches the test environment, "
+            f"trigger verification: <code>POST /agents/sre/verify-fix/{conversation_id}</code></p>"
+        )
     lines += [
         "<hr/>",
         f"<p><em>Filed by SRE Agent. Triage conversation: {conversation_id}</em></p>",
@@ -109,6 +119,10 @@ async def file_bug(
     title = f"[SRE] {title_issue[:120]}"
     sig_snippet = (error_signature or title_issue)[:60]
 
+    deployments_enabled = bool(
+        (((config.get("sre", {}) or {}).get("observability", {}) or {})
+         .get("deployments", {}) or {}).get("enabled")
+    )
     description = _build_description(
         root_cause=root_cause,
         evidence=evidence,
@@ -116,6 +130,7 @@ async def file_bug(
         conversation_id=conversation_id,
         repro=repro,
         severity=severity,
+        deployments_enabled=deployments_enabled,
     )
 
     if dry_run or not enabled:

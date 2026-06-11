@@ -67,6 +67,10 @@ async def stream_triage(
         except Exception:  # noqa: BLE001 — fresh thread
             resuming = False
 
+        # Mark the conversation running for the duration of this round (it flips to
+        # paused/concluded below). A fresh (non-resume) round always starts running.
+        await _mark_state(conv_id, project_id, "running")
+
         yield {"type": "node", "name": "ask_user" if resuming else "understand"}
         try:
             if resuming:
@@ -84,13 +88,16 @@ async def stream_triage(
             yield {"type": "error", "message": str(e)}
             return
 
-        # Paused on a mid-loop question? Surface it and end the round (state is frozen).
+        # Paused on a mid-loop question? Surface it, mark the conversation paused, and
+        # CLOSE the stream (§9.7B v0.7 — no idle long-lived connections). The UI renders
+        # the question from the events already received; POST …/answer opens a fresh stream.
         interrupts = result.get("__interrupt__")
         if interrupts:
             q = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
             yield {"type": "question", "question": q, "conversation_id": conv_id}
             await memory.append_message(conv_id, "assistant", _render_question(q))
-            yield {"type": "final", "conversation_id": conv_id, "awaiting": "answer"}
+            await _mark_paused(conv_id, project_id, q)
+            yield {"type": "paused", "conversation_id": conv_id, "question": q}
             return
 
         verdict = result.get("verdict") or {}
@@ -120,6 +127,7 @@ async def stream_triage(
             "assistant",
             _render_assistant_text(verdict, handoff is not None),
         )
+        await _mark_state(conv_id, project_id, "concluded")
         yield {"type": "final", "conversation_id": conv_id, "verdict": verdict}
 
 
@@ -127,6 +135,152 @@ def _render_question(q: dict) -> str:
     text = (q or {}).get("text", "Could you clarify?")
     opts = (q or {}).get("options")
     return text + (f"\nOptions: {', '.join(opts)}" if opts else "")
+
+
+# --- v0.7 conversation-state tracking (§9.7B) ------------------------------
+
+async def _mark_state(conversation_id: str, project_id: str | None, state: str,
+                      question: dict | None = None) -> None:
+    """Upsert the conversation's lifecycle state. Best-effort; never fatal to a stream."""
+    import json as _json
+    from sqlalchemy import text as _text
+    from shared.storage import init_db, is_sqlite, portable_sql
+    try:
+        if is_sqlite():
+            await init_db()
+        async with get_session() as session:
+            paused_at = "CURRENT_TIMESTAMP" if state == "paused" else "NULL"
+            await session.execute(
+                _text(portable_sql(f"""
+                    INSERT INTO sre_conversation_state
+                        (conversation_id, project_id, state, pending_question, paused_at, updated_at)
+                    VALUES (:cid, :pid, :state, :pq, {paused_at}, CURRENT_TIMESTAMP)
+                    ON CONFLICT(conversation_id) DO UPDATE SET
+                        state = excluded.state,
+                        pending_question = excluded.pending_question,
+                        paused_at = {paused_at},
+                        updated_at = CURRENT_TIMESTAMP
+                """)),
+                {"cid": conversation_id, "pid": project_id, "state": state,
+                 "pq": _json.dumps(question) if question else None},
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        logger.warning("sre_state_mark_failed", conv=conversation_id, state=state)
+
+
+async def _mark_paused(conversation_id: str, project_id: str | None, question: dict) -> None:
+    await _mark_state(conversation_id, project_id, "paused", question)
+
+
+async def sweep_expired_questions() -> dict:
+    """Expire paused checkpoints older than the TTL (§9.7B v0.7).
+
+    For each stale paused conversation: resume the graph past the question with a
+    sentinel so it concludes `needs_more_info` (the unanswered PendingQuestion attached),
+    then mark the row `expired`. The investigation ends honestly instead of leaking
+    checkpoints. Returns a small summary for the scheduler log.
+    """
+    import json as _json
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import text as _text
+    from langgraph.types import Command
+    from agents.sre_agent.graph import get_interactive_graph
+
+    cfg = _load_sre_config()
+    ttl_hours = int((cfg.get("sre", {}) or {}).get("question_ttl_hours", 24))
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=ttl_hours)).isoformat()
+
+    rows: list = []
+    try:
+        async with get_session() as session:
+            rows = (
+                await session.execute(
+                    _text("""SELECT conversation_id, project_id, pending_question
+                             FROM sre_conversation_state
+                             WHERE state = 'paused' AND paused_at IS NOT NULL
+                               AND paused_at < :cutoff"""),
+                    {"cutoff": cutoff},
+                )
+            ).all()
+    except Exception:  # noqa: BLE001
+        return {"expired": 0, "error": "state table unavailable"}
+
+    if not rows:
+        return {"expired": 0}
+
+    app = get_interactive_graph()
+    expired = 0
+    for row in rows:
+        conv_id = row.conversation_id
+        gcfg = {"configurable": {"thread_id": conv_id}}
+        try:
+            # Resume with an explicit "no answer" sentinel; the ask_user node folds it as
+            # an unanswered item and the loop proceeds to Conclude.
+            await app.ainvoke(Command(resume="__no_answer_timeout__"), gcfg)
+        except Exception:  # noqa: BLE001 — even if resume fails, mark expired so we stop retrying
+            logger.warning("sweep_resume_failed", conv=conv_id)
+        await _mark_state(conv_id, row.project_id, "expired",
+                          _json.loads(row.pending_question) if row.pending_question else None)
+        expired += 1
+
+    logger.info("sre_question_sweep_done", expired=expired, ttl_hours=ttl_hours)
+    return {"expired": expired, "ttl_hours": ttl_hours}
+
+
+async def claim_answer(conversation_id: str) -> bool:
+    """Compare-and-set guard for /answer concurrency (§9.7B v0.7): atomically flip
+    paused → running. Returns False if the conversation wasn't paused (already answered
+    or never paused) so the router can return 409 Conflict — first answer wins."""
+    from sqlalchemy import text as _text
+    try:
+        async with get_session() as session:
+            res = await session.execute(
+                _text("""UPDATE sre_conversation_state
+                         SET state = 'running', updated_at = CURRENT_TIMESTAMP
+                         WHERE conversation_id = :c AND state = 'paused'"""),
+                {"c": conversation_id},
+            )
+            await session.commit()
+            return (res.rowcount or 0) > 0
+    except Exception:  # noqa: BLE001 — if state table is unavailable, don't block answers
+        return True
+
+
+async def get_conversation_state(conversation_id: str) -> dict:
+    """Report conversation lifecycle for UI re-hydration (§9.7B v0.7).
+
+    Returns {state: running|paused|concluded|expired, pending_question?, paused_at?}.
+    Cross-checks the recorded state against the live checkpointer so a resumed run isn't
+    reported as still-paused.
+    """
+    import json as _json
+    from sqlalchemy import text as _text
+
+    row = None
+    try:
+        async with get_session() as session:
+            row = (
+                await session.execute(
+                    _text("""SELECT state, pending_question, paused_at
+                             FROM sre_conversation_state WHERE conversation_id = :c"""),
+                    {"c": conversation_id},
+                )
+            ).first()
+    except Exception:  # noqa: BLE001
+        pass
+
+    if not row:
+        return {"conversation_id": conversation_id, "state": "running"}
+
+    state = row.state
+    pending = _json.loads(row.pending_question) if row.pending_question else None
+    return {
+        "conversation_id": conversation_id,
+        "state": state,
+        "pending_question": pending,
+        "paused_at": str(row.paused_at) if row.paused_at else None,
+    }
 
 
 async def steer_triage(*, conversation_id: str, action: str, hypothesis_id: str | None,

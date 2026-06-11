@@ -123,6 +123,16 @@ function SingleTriage({ projectId }: { projectId: string }) {
 
   const started = state.loading || state.steps.length > 0 || !!state.verdict || !!state.question;
 
+  // Conversation lifecycle chip (§13B.4 v0.7): running while streaming, paused when a
+  // question is open, concluded once a verdict lands.
+  const convState: "running" | "paused" | "concluded" | undefined = state.loading
+    ? "running"
+    : state.question
+      ? "paused"
+      : state.verdict
+        ? "concluded"
+        : undefined;
+
   return (
     <div className="grid gap-5 lg:grid-cols-2">
       {/* Left: issue input + verdict */}
@@ -207,6 +217,8 @@ function SingleTriage({ projectId }: { projectId: string }) {
           </div>
         )}
 
+        {convState && <ConversationChip state={convState} />}
+
         {state.verdict && <VerdictCard verdict={state.verdict} severity={state.severity} />}
 
         {state.handoff && (
@@ -217,6 +229,7 @@ function SingleTriage({ projectId }: { projectId: string }) {
             <p className="mt-1 text-xs">
               A failing repro test and bug packet were forwarded for an automated fix attempt.
             </p>
+            {state.conversationId && <VerifyFixButton conversationId={state.conversationId} projectId={projectId} />}
           </div>
         )}
       </div>
@@ -244,6 +257,48 @@ function SingleTriage({ projectId }: { projectId: string }) {
         {state.evidence.length > 0 && <EvidenceLedger evidence={state.evidence} />}
         {state.probes.length > 0 && <ProbeLog probes={state.probes} />}
       </div>
+    </div>
+  );
+}
+
+function ConversationChip({ state }: { state: "running" | "paused" | "concluded" | "expired" }) {
+  const meta = {
+    running: { label: "Running", cls: "bg-blue-100 text-blue-700" },
+    paused: { label: "Paused — awaiting answer", cls: "bg-amber-100 text-amber-700" },
+    concluded: { label: "Concluded", cls: "bg-green-100 text-green-700" },
+    expired: { label: "Expired", cls: "bg-surface-2 text-muted" },
+  }[state];
+  return (
+    <span className={cn("inline-block rounded-full px-2 py-0.5 text-xs font-medium", meta.cls)}>
+      {meta.label}
+    </span>
+  );
+}
+
+function VerifyFixButton({ conversationId, projectId }: { conversationId: string; projectId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string>();
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = (await api.verifyFix(conversationId, { project_id: projectId })) as { message?: string };
+      setResult(r.message ?? "Verification triggered.");
+    } catch (e) {
+      setResult(`Error: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mt-2">
+      <button
+        onClick={run}
+        disabled={busy}
+        className="rounded-md border border-blue-300 bg-background px-2.5 py-1 text-xs text-blue-700 hover:bg-blue-100 disabled:opacity-40"
+      >
+        {busy ? "Verifying…" : "Verify fix now"}
+      </button>
+      {result && <p className="mt-1 text-xs text-blue-800">{result}</p>}
     </div>
   );
 }

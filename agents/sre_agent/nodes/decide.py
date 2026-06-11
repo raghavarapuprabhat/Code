@@ -33,9 +33,12 @@ async def handoff_fixer_node(state: SREState, *, config: dict) -> dict:
         "suggested_fix_area": verdict.get("next_step", ""),
         "repro": issue.get("repro_steps", ""),
         "confidence": verdict.get("confidence"),
+        "conversation_id": conv_id,
         "conversation_link": f"/conversations/{conv_id}" if conv_id else None,
         # v0.6.3: failing repro test for test-first Fixer mode.
         "repro_test": repro_test,
+        # v0.7: observability config so the Fixer can choose auto vs manual verify (§9.17.4).
+        "observability": (config.get("sre", {}) or {}).get("observability", {}) or {},
         # Retained for backward compatibility with the shipped Fixer ContextLoad.
         "verdict": verdict,
         "likely_files": suspect,

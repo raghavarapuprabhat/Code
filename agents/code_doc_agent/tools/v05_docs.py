@@ -9,6 +9,10 @@ from __future__ import annotations
 from .mermaid_tools import _safe_id
 
 
+def _pct(v: float | None) -> str:
+    return f"{round(v * 100)}%" if isinstance(v, (int, float)) else "—"
+
+
 # --- 13_dependencies (§8.9.7) ----------------------------------------------
 
 def render_dependencies(findings: dict) -> str:
@@ -84,8 +88,23 @@ def render_onboarding(model: dict, eval_results: dict) -> str:
 # --- 15_requirements_traceability (§8.9.1) ---------------------------------
 
 def render_requirements(requirements: list[dict], traceability: dict,
-                        areapath: str | None) -> str:
+                        areapath: str | None, trace_eval: dict | None = None) -> str:
     out = ["# Requirements Traceability\n"]
+    # v0.7: TraceLink precision/recall per method tier (§8.9.1).
+    if trace_eval and trace_eval.get("scored"):
+        ov = trace_eval.get("overall", {})
+        out.append(
+            f"> **TraceLink quality** — overall precision "
+            f"{_pct(ov.get('precision'))}, recall {_pct(ov.get('recall'))} "
+            f"(against {trace_eval.get('labeled_total', 0)} labeled links)."
+        )
+        per = trace_eval.get("per_tier", {})
+        if per:
+            tiers = ", ".join(
+                f"{t}: P={_pct(v.get('precision'))}/R={_pct(v.get('recall'))}"
+                for t, v in per.items()
+            )
+            out.append(f"> Per tier — {tiers}\n")
     if not areapath:
         out.append("> **Not configured** — no ADO requirements area path was provided at index "
                    "time. Set one via `POST /agents/code_doc/projects/{id}/requirements` to link "
@@ -96,15 +115,21 @@ def render_requirements(requirements: list[dict], traceability: dict,
                    "(ADO MCP unavailable or area empty).")
         return "\n".join(out)
 
+    # v0.7: work-item titles are requirement-derived (untrusted) text — wrap them in
+    # <req-content> provenance markers so the SRE Agent treats them as data, not
+    # instructions (§8.9.1). Markers are stripped at Hub render time.
+    from shared.docs import mark_req_content
+
     rows = traceability.get("matrix", [])
     out.append(f"Requirements sourced from ADO area path `{areapath}`.\n")
-    out += ["| Work Item | Type | State | Status | Components | Tests |",
-            "|-----------|------|-------|--------|-----------|-------|"]
+    out += ["| Work Item | Title | Type | State | Status | Components | Tests |",
+            "|-----------|-------|------|-------|--------|-----------|-------|"]
     for r in rows:
         comps = ", ".join(r.get("components", [])) or "—"
         tests = ", ".join(r.get("tests", [])) or "—"
         wi = r.get("work_item_id", "")
-        out.append(f"| [#{wi}](wi:{wi}) | {r.get('wi_type','')} | {r.get('state','')} "
+        title = mark_req_content((r.get("title", "") or "").replace("|", "/"), wi)
+        out.append(f"| [#{wi}](wi:{wi}) | {title} | {r.get('wi_type','')} | {r.get('state','')} "
                    f"| {r.get('status','')} | {comps} | {tests} |")
     out.append("")
 
@@ -112,7 +137,9 @@ def render_requirements(requirements: list[dict], traceability: dict,
     if unimplemented:
         out.append("## ⚠ Unimplemented Requirements\n")
         for r in unimplemented:
-            out.append(f"- #{r.get('work_item_id','')}: {r.get('title','')}")
+            wi = r.get("work_item_id", "")
+            title = mark_req_content(r.get("title", "") or "", wi)
+            out.append(f"- #{wi}: {title}")
         out.append("")
 
     untraced = traceability.get("untraced_components", [])

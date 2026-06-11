@@ -18,6 +18,10 @@ logger = structlog.get_logger()
 
 _YES = {"approve", "approved", "yes", "y", "ok", "okay", "go", "allow", "allowed", "confirm"}
 
+# Sentinel injected by the TTL sweeper (§9.7B v0.7) when a paused question is abandoned
+# past its 24h TTL. Folds as an unanswered item so the loop concludes needs_more_info.
+_NO_ANSWER = "__no_answer_timeout__"
+
 
 async def ask_user_node(state: SREState, *, config: dict) -> dict:
     q = state.get("pending_question") or {}
@@ -28,8 +32,20 @@ async def ask_user_node(state: SREState, *, config: dict) -> dict:
     text_ans = answer if isinstance(answer, str) else (answer or {}).get("text", "")
     text_ans = (text_ans or "").strip()
 
-    blocks = q.get("blocks", "verdict")
     evidence = [dict(e) for e in (state.get("evidence") or [])]
+
+    # TTL expiry: the question was never answered. Record it as an open item and let the
+    # loop conclude honestly (needs_more_info) rather than fabricating an answer.
+    if text_ans == _NO_ANSWER:
+        _add(evidence, "system", "question expired",
+             f"unanswered after TTL: {(q.get('text') or '')[:200]}")
+        return {
+            "pending_question": None,
+            "clarification": q,           # surfaced in verdict.questions at Conclude
+            "evidence": evidence,
+        }
+
+    blocks = q.get("blocks", "verdict")
     out: dict = {"pending_question": None}
 
     if blocks == "probe_approval":

@@ -144,6 +144,43 @@ export interface DigestEntry {
   created_at: string;
 }
 
+export interface RunStatus {
+  project_id: string;
+  last_indexed: string | null;
+  status: "ok" | "error" | "never" | string;
+  run: {
+    mode: string;
+    files_indexed: number;
+    summaries: number;
+    gap_count: number;
+    error_count: number;
+    errors: unknown[];
+    model_hash: string;
+    duration_ms: number;
+    created_at: string;
+  } | null;
+}
+
+export interface TraceRow {
+  work_item_id: string;
+  title: string;
+  wi_type: string;
+  state: string;
+  components: string[];
+  business_rules: string[];
+  tests: string[];
+  status: "implemented" | "partial" | "unimplemented" | string;
+}
+
+export type ConversationState = "running" | "paused" | "concluded" | "expired";
+
+export interface TriageStateResponse {
+  conversation_id: string;
+  state: ConversationState;
+  pending_question?: SreQuestion | null;
+  paused_at?: string | null;
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -248,6 +285,12 @@ export const api = {
     return getJson<CalibrationStats>(`/agents/sre/calibration/${encodeURIComponent(projectId)}`);
   },
 
+  getTriageState(conversationId: string): Promise<TriageStateResponse> {
+    return getJson<TriageStateResponse>(
+      `/agents/sre/triage/${encodeURIComponent(conversationId)}`,
+    );
+  },
+
   async triageCsv(projectId: string, file: File): Promise<Blob> {
     const form = new FormData();
     form.append("project_id", projectId);
@@ -270,6 +313,26 @@ export const api = {
 
   getDigest(projectId: string): Promise<{ project_id: string; entries: DigestEntry[] }> {
     return getJson(`/agents/code_doc/projects/${encodeURIComponent(projectId)}/digest`);
+  },
+
+  getLatestRun(projectId: string): Promise<RunStatus> {
+    return getJson<RunStatus>(
+      `/agents/code_doc/projects/${encodeURIComponent(projectId)}/runs/latest`,
+    );
+  },
+
+  getTraceability(projectId: string): Promise<{ project_id: string; matrix: TraceRow[] }> {
+    return getJson(`/agents/code_doc/projects/${encodeURIComponent(projectId)}/trace`);
+  },
+
+  reportWrongTraceLink(
+    projectId: string,
+    body: { workitem_id: string; target_kind: string; target_ref: string; method?: string },
+  ) {
+    return postJson(
+      `/agents/code_doc/projects/${encodeURIComponent(projectId)}/trace/wrong-link`,
+      body,
+    );
   },
 
   submitDocFeedback(

@@ -22,6 +22,7 @@ sre:
   max_followup_rounds: 3
   confidence_threshold: 0.7
   csv_max_rows: 500
+  question_ttl_hours: 24      # v0.7 — paused checkpoints expire to needs_more_info (§9.7B)
 
   # Agentic investigation loop (§9.5, §9.9). The loop stops on confidence, budget,
   # or no-new-evidence — whichever comes first.

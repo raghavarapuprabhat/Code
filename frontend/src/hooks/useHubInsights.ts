@@ -19,6 +19,15 @@ export function useDigest(projectId: string | undefined) {
   });
 }
 
+/** Run-status strip data for the landing page (§13B.1 v0.7). */
+export function useLatestRun(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ["run", projectId],
+    queryFn: () => api.getLatestRun(projectId!),
+    enabled: !!projectId,
+  });
+}
+
 /** Trigger an on-demand eval and refresh the badge. */
 export function useRunEval(projectId: string | undefined) {
   const qc = useQueryClient();

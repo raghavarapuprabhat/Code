@@ -147,6 +147,102 @@ async def get_digest(*, project_id: str, limit: int = 10) -> dict:
     ]}
 
 
+async def get_traceability(*, project_id: str) -> dict:
+    """Structured traceability matrix for the TraceabilityPage (§13B.3 v0.7)."""
+    import json
+    from sqlalchemy import text
+    from shared.storage import get_session
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                text("""SELECT work_item_id, title, wi_type, state, components,
+                               business_rules, tests, status
+                        FROM requirements_trace WHERE project_id = :p
+                        ORDER BY work_item_id"""),
+                {"p": project_id},
+            )
+        ).all()
+
+    def _j(v):
+        if not v:
+            return []
+        try:
+            return json.loads(v)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+    matrix = [
+        {
+            "work_item_id": r.work_item_id,
+            "title": r.title,
+            "wi_type": r.wi_type,
+            "state": r.state,
+            "components": _j(r.components),
+            "business_rules": _j(r.business_rules),
+            "tests": _j(r.tests),
+            "status": r.status,
+        }
+        for r in rows
+    ]
+    return {"project_id": project_id, "matrix": matrix}
+
+
+async def record_wrong_trace_link(*, project_id: str, workitem_id: str, target_kind: str,
+                                  target_ref: str, method: str = "unknown") -> dict:
+    """A "wrong link" 👎 vote appends a known-wrong distractor to trace_eval_links (§8.9.1)."""
+    from agents.code_doc_agent.nodes.trace_eval import record_wrong_link
+    return await record_wrong_link(
+        project_id=project_id, workitem_id=workitem_id,
+        target_kind=target_kind, target_ref=target_ref, method=method,
+    )
+
+
+async def get_latest_run(*, project_id: str) -> dict:
+    """Run-status strip data for the Hub landing page (§13B.1 v0.7)."""
+    import json
+    from sqlalchemy import text
+    from shared.storage import get_session, iso_ts
+    async with get_session() as session:
+        run = (
+            await session.execute(
+                text("""SELECT mode, files_indexed, summaries, gap_count, error_count,
+                               errors_json, model_hash, duration_ms, status, created_at
+                        FROM code_doc_runs WHERE project_id = :p
+                        ORDER BY created_at DESC LIMIT 1"""),
+                {"p": project_id},
+            )
+        ).first()
+        proj = (
+            await session.execute(
+                text("SELECT last_indexed, display_name FROM code_projects WHERE id = :p"),
+                {"p": project_id},
+            )
+        ).first()
+    if not run:
+        return {
+            "project_id": project_id,
+            "last_indexed": iso_ts(proj.last_indexed) if proj else None,
+            "status": "never" if not (proj and proj.last_indexed) else "ok",
+            "run": None,
+        }
+    return {
+        "project_id": project_id,
+        "last_indexed": iso_ts(proj.last_indexed) if proj else None,
+        "status": run.status,
+        "run": {
+            "mode": run.mode,
+            "files_indexed": run.files_indexed,
+            "summaries": run.summaries,
+            "gap_count": run.gap_count,
+            "error_count": run.error_count,
+            "errors": json.loads(run.errors_json) if run.errors_json else [],
+            "model_hash": run.model_hash,
+            "duration_ms": run.duration_ms,
+            "created_at": str(run.created_at),
+        },
+    }
+
+
 async def get_latest_eval(*, project_id: str) -> dict:
     from sqlalchemy import text
     from shared.storage import get_session

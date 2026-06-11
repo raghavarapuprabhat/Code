@@ -161,7 +161,7 @@ async def doc_gen_node(state: CodeDocState, *, config: dict) -> dict:
     docs["14_onboarding.md"] = render_onboarding(model, state.get("eval_results") or {})
     docs["15_requirements_traceability.md"] = render_requirements(
         state.get("requirements") or [], state.get("traceability") or {},
-        state.get("requirements_areapath"),
+        state.get("requirements_areapath"), state.get("trace_eval") or {},
     )
     docs["16_change_digest.md"] = render_change_digest(state.get("drift_digest") or "")
 

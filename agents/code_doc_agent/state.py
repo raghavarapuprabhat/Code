@@ -238,6 +238,7 @@ class CodeDocState(TypedDict, total=False):
     requirements_areapath: str | None     # ADO area path for requirements (None -> skip)
     requirements: list[dict]              # ingested work items (Epic/Feature/Story)
     traceability: dict                    # requirement <-> component <-> rule <-> test matrix
+    trace_eval: dict                      # v0.7 — TraceLink precision/recall per method tier
     dependency_findings: dict             # CVE/license/outdated inventory (DependencyAudit)
     db_drift: dict                        # code-vs-database drift report
     test_trace: dict                      # rule -> test mapping

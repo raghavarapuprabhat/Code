@@ -147,6 +147,8 @@ async def run_indexing(
     requirements_areapath: str | None = None,
 ) -> dict:
     """Public helper used by the FastAPI backend and the standalone CLI."""
+    import time as _time
+
     cfg = load_config()
     g = build_graph(cfg)
     initial: CodeDocState = {
@@ -156,17 +158,63 @@ async def run_indexing(
     }
     if requirements_areapath:
         initial["requirements_areapath"] = requirements_areapath
+
+    started = _time.monotonic()
     final_state = await g.ainvoke(initial)
+    duration_ms = int((_time.monotonic() - started) * 1000)
+
     model = final_state.get("architecture_model") or {}
-    return {
+    coverage = final_state.get("coverage_report") or {}
+    errors = final_state.get("errors") or []
+    summary = {
         "project_id": final_state.get("project_id"),
         "files_indexed": len(final_state.get("file_inventory", [])),
         "summaries": len(final_state.get("file_summaries") or {}),
-        "coverage": final_state.get("coverage_report"),
+        "coverage": coverage,
         "docs_generated": sorted((final_state.get("generated_docs") or {}).keys()),
         # v0.4/v0.5 surface
         "architecture_components": len(model.get("components", [])),
         "model_hash": final_state.get("model_hash", ""),
         "eval_score": (final_state.get("eval_results") or {}).get("score"),
         "requirements_traced": len((final_state.get("traceability") or {}).get("matrix", [])),
+        "duration_ms": duration_ms,
     }
+    # v0.7: persist run metadata for the Hub run-status strip (§13B.1). Best-effort.
+    await _persist_run(final_state, mode, coverage, errors, duration_ms)
+    return summary
+
+
+async def _persist_run(final_state, mode, coverage, errors, duration_ms) -> None:
+    import json as _json
+    import uuid as _uuid
+    try:
+        from sqlalchemy import text as _text
+        from shared.storage import get_session, init_db, is_sqlite, portable_sql
+        pid = final_state.get("project_id")
+        if not pid:
+            return
+        if is_sqlite():
+            await init_db()
+        async with get_session() as session:
+            await session.execute(
+                _text(portable_sql("""
+                    INSERT INTO code_doc_runs
+                        (id, project_id, mode, files_indexed, summaries, gap_count,
+                         error_count, errors_json, model_hash, duration_ms, status)
+                    VALUES (:id, :pid, :mode, :fi, :su, :gap, :ec, :ej, :mh, :dur, :st)
+                """)),
+                {
+                    "id": str(_uuid.uuid4()), "pid": pid, "mode": mode,
+                    "fi": len(final_state.get("file_inventory", [])),
+                    "su": len(final_state.get("file_summaries") or {}),
+                    "gap": len((coverage or {}).get("gaps", [])),
+                    "ec": len(errors),
+                    "ej": _json.dumps(errors[:20]),
+                    "mh": final_state.get("model_hash", ""),
+                    "dur": duration_ms,
+                    "st": "error" if errors else "ok",
+                },
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001 — run logging must never fail an index
+        pass
