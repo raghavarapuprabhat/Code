@@ -22,6 +22,16 @@ DOC_METADATA: dict[str, dict] = {
     "06_business_logic": {"title": "Business Logic", "audience": "developer", "sort_order": 6},
     "07_api_surface": {"title": "API Surface", "audience": "developer", "sort_order": 7},
     "08_batch_jobs": {"title": "Batch Jobs & Scheduled Tasks", "audience": "developer", "sort_order": 8},
+    # v0.4 — architecture reconstruction (§8.8.3)
+    "09_deployment_infra": {"title": "Deployment & Infrastructure", "audience": "architecture", "sort_order": 9},
+    "10_architecture_decisions": {"title": "Architecture Decisions (Inferred)", "audience": "architecture", "sort_order": 10},
+    "11_quality_hotspots": {"title": "Quality & Hotspots", "audience": "developer", "sort_order": 11},
+    "12_external_integrations": {"title": "External Integrations", "audience": "architecture", "sort_order": 12},
+    # v0.5 — requirements, deps, onboarding, drift (§8.9.10)
+    "13_dependencies": {"title": "Dependencies & Security Posture", "audience": "developer", "sort_order": 13},
+    "14_onboarding": {"title": "Onboarding Path", "audience": "developer", "sort_order": 14},
+    "15_requirements_traceability": {"title": "Requirements Traceability", "audience": "management", "sort_order": 15},
+    "16_change_digest": {"title": "Architecture Change Digest", "audience": "architecture", "sort_order": 16},
 }
 
 

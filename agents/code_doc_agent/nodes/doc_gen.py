@@ -14,6 +14,13 @@ import structlog
 
 from shared.llm_adapter import build_adapter_from_config
 from ..state import CodeDocState
+from ..tools.arch_docs import (
+    render_adrs,
+    render_architecture,
+    render_deployment,
+    render_external,
+    render_quality,
+)
 from ..tools.mermaid_tools import (
     render_call_graph,
     render_er_diagram,
@@ -47,22 +54,34 @@ async def doc_gen_node(state: CodeDocState, *, config: dict) -> dict:
     mgmt_resp = await llm.chat([{"role": "user", "content": mgmt_prompt}])
     docs["01_management_overview.md"] = mgmt_resp.content.strip()
 
-    # 2. Architecture (Mermaid module diagram + textual breakdown)
-    arch_md = ["# Architecture\n", "## Component Diagram\n", "```mermaid"]
-    arch_md.append(render_module_diagram(state.get("modules", [])))
-    arch_md.append("```\n")
-    arch_md.append("## Modules\n")
-    for m in state.get("modules", []):
-        arch_md.append(f"### {m.get('name')}")
-        if m.get("purpose"):
-            arch_md.append(m["purpose"])
-        files = m.get("files", [])
-        if files:
-            arch_md.append("\n**Files:**")
-            for f in files[:50]:
-                arch_md.append(f"- `{f}`")
-        arch_md.append("")
-    docs["02_architecture.md"] = "\n".join(arch_md)
+    # 2. Architecture — C4 L1–L3 from the Architecture Model (v0.4). When the model
+    #    is unavailable (e.g. ArchSynthesis skipped), fall back to the v0.3 module view.
+    model = state.get("architecture_model") or {}
+    model_hash = state.get("model_hash", "")
+    project_name = state.get("display_name") or os.path.basename(project_path)
+    if model.get("components"):
+        docs["02_architecture.md"] = render_architecture(model, project_name, model_hash)
+        # v0.4 architecture-reconstruction docs (09–12), all from the same model.
+        docs["09_deployment_infra.md"] = render_deployment(model, model_hash)
+        docs["10_architecture_decisions.md"] = render_adrs(model, model_hash)
+        docs["11_quality_hotspots.md"] = render_quality(model, model_hash)
+        docs["12_external_integrations.md"] = render_external(model, model_hash)
+    else:
+        arch_md = ["# Architecture\n", "## Component Diagram\n", "```mermaid"]
+        arch_md.append(render_module_diagram(state.get("modules", [])))
+        arch_md.append("```\n")
+        arch_md.append("## Modules\n")
+        for m in state.get("modules", []):
+            arch_md.append(f"### {m.get('name')}")
+            if m.get("purpose"):
+                arch_md.append(m["purpose"])
+            files = m.get("files", [])
+            if files:
+                arch_md.append("\n**Files:**")
+                for f in files[:50]:
+                    arch_md.append(f"- `{f}`")
+            arch_md.append("")
+        docs["02_architecture.md"] = "\n".join(arch_md)
 
     # 3. Data model (ER diagram from extracted entities)
     entities = state.get("data_entities", []) or []
@@ -129,6 +148,22 @@ async def doc_gen_node(state: CodeDocState, *, config: dict) -> dict:
 
     # 8. Batch jobs and scheduled tasks
     docs["08_batch_jobs.md"] = _render_batch_jobs(state.get("batch_jobs") or [])
+
+    # --- v0.5 docs (13–16): rendered from skippable-node outputs in state. Each
+    #     carries a "not configured" note when its producing node was bypassed. ---
+    from ..tools.v05_docs import (
+        render_dependencies,
+        render_onboarding,
+        render_requirements,
+        render_change_digest,
+    )
+    docs["13_dependencies.md"] = render_dependencies(state.get("dependency_findings") or {})
+    docs["14_onboarding.md"] = render_onboarding(model, state.get("eval_results") or {})
+    docs["15_requirements_traceability.md"] = render_requirements(
+        state.get("requirements") or [], state.get("traceability") or {},
+        state.get("requirements_areapath"),
+    )
+    docs["16_change_digest.md"] = render_change_digest(state.get("drift_digest") or "")
 
     # v0.2: return documents in memory keyed by doc_id (filename stem, no ".md").
     # The persist node stores these in Postgres (generated_docs) and embeds them

@@ -96,6 +96,15 @@ async def persist_node(state: CodeDocState, *, config: dict) -> dict:
     if summaries:
         _embed_summaries(store, pid, summaries)
 
+    # Invalidate the hybrid-retriever BM25 corpus cache so re-indexed chunks are picked
+    # up on the next query (§8.9.2).
+    try:
+        from shared.retrieval import invalidate_corpus_cache
+        invalidate_corpus_cache(f"docs_{pid}")
+        invalidate_corpus_cache(f"code_{pid}")
+    except Exception:  # noqa: BLE001
+        pass
+
     # 3. Mark the project indexed.
     async with get_session() as session:
         await session.execute(

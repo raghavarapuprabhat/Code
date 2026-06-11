@@ -104,7 +104,17 @@ async def run_agent_chat(
 
 
 def _query_collection(store: "ChromaStore", collection: str, question: str, n: int) -> list[dict]:
-    """Best-effort similarity query; returns [] if the collection is missing."""
+    """Hybrid (BM25 + vector + RRF) retrieval over a collection (§8.9.2).
+
+    Returns [] if the collection is missing. Falls back to pure vector search if the
+    hybrid retriever is unavailable for any reason.
+    """
+    try:
+        from shared.retrieval import hybrid_search
+        hits = hybrid_search(store, collection, question, n_results=n)
+        return [{"text": h["text"], "meta": h["meta"]} for h in hits]
+    except Exception:  # noqa: BLE001 — fall back to vector-only
+        pass
     try:
         res = store.query(collection, query_texts=[question], n_results=n)
     except Exception:  # noqa: BLE001

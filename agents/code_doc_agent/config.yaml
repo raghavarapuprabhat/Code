@@ -39,3 +39,14 @@ code_doc:
   max_verify_loops: 3
   chunk_size_tokens: 8000
   parallel_files: 4
+
+  # --- v0.4 architecture reconstruction (§8.8) ---
+  doc_critique: true            # LLM-as-judge quality gate before persist
+  max_critique_loops: 2
+  # Which docs to critique (default: arch-reconstruction + management overview).
+  # critique_docs: [02_architecture, 09_deployment_infra, 10_architecture_decisions, ...]
+
+  # --- v0.5 enrichment (§8.9) — all skippable ---
+  doc_eval: true                # golden-Q&A eval after each index
+  dependency_audit: true        # npm audit / OWASP — auto-skips when binary absent
+  # requirements_areapath is provided per-project via the API, not config.

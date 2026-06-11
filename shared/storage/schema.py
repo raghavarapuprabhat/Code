@@ -206,6 +206,82 @@ _SQLITE_DDL: list[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_verdict_outcomes_proj ON verdict_outcomes (project_id)",
+    # --- Code Doc Agent v0.5 (§8.9) ---
+    # Architecture drift digest (§8.9.4) — append-only per re-index.
+    """
+    CREATE TABLE IF NOT EXISTS arch_digests (
+        id              TEXT PRIMARY KEY,
+        project_id      TEXT NOT NULL,
+        period          TEXT NOT NULL,
+        digest_md       TEXT NOT NULL,
+        model_hash_from TEXT,
+        model_hash_to   TEXT,
+        created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_arch_digests_proj ON arch_digests (project_id, created_at)",
+    # Full prior Architecture Model snapshot, so the next index can structurally diff
+    # (architecture_models always holds the *current* model; this holds the previous).
+    """
+    CREATE TABLE IF NOT EXISTS arch_model_snapshots (
+        project_id  TEXT PRIMARY KEY,
+        model_json  TEXT NOT NULL,
+        model_hash  TEXT NOT NULL,
+        created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    # Requirements traceability matrix (§8.9.1) — one row per work item.
+    """
+    CREATE TABLE IF NOT EXISTS requirements_trace (
+        project_id    TEXT NOT NULL,
+        work_item_id  TEXT NOT NULL,
+        title         TEXT,
+        wi_type       TEXT,
+        state         TEXT,
+        components     TEXT,          -- JSON list of component names
+        business_rules TEXT,          -- JSON list of rule refs
+        tests          TEXT,          -- JSON list of test refs
+        status        TEXT,           -- implemented | partial | unimplemented
+        created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (project_id, work_item_id)
+    )
+    """,
+    # Doc evaluation runs (§8.9.3) — golden Q&A scores per re-index.
+    """
+    CREATE TABLE IF NOT EXISTS doc_eval_runs (
+        id            TEXT PRIMARY KEY,
+        project_id    TEXT NOT NULL,
+        score         REAL,
+        total         INTEGER,
+        passed        INTEGER,
+        detail_json   TEXT,
+        created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_doc_eval_proj ON doc_eval_runs (project_id, created_at)",
+    # Reader feedback per doc section (§8.9.9).
+    """
+    CREATE TABLE IF NOT EXISTS doc_feedback (
+        id            TEXT PRIMARY KEY,
+        project_id    TEXT NOT NULL,
+        doc_id        TEXT NOT NULL,
+        section       TEXT,
+        rating        INTEGER,        -- 1 (down) | 5 (up), or 1-5
+        comment       TEXT,
+        created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_doc_feedback_proj ON doc_feedback (project_id, doc_id)",
+    # Dependency & security findings (§8.9.7) — keyed per run for trends.
+    """
+    CREATE TABLE IF NOT EXISTS dependency_findings (
+        id            TEXT PRIMARY KEY,
+        project_id    TEXT NOT NULL,
+        findings_json TEXT NOT NULL,
+        created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_dep_findings_proj ON dependency_findings (project_id, created_at)",
 ]
 
 _initialized = False
