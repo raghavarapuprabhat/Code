@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
-from . import codebase, git_tools, history, rag
+from . import architecture, codebase, git_tools, history, probes, rag
 
 ToolFn = Callable[[str, dict, dict], Awaitable[str]]
 
@@ -98,6 +98,20 @@ async def _find_similar_issues(project_id: str, args: dict, ctx: dict) -> str:
     )
 
 
+# --- v0.4: architecture-model + runtime-probe tools -------------------------
+
+async def _get_architecture(project_id: str, args: dict, ctx: dict) -> str:
+    return await architecture.get_architecture(project_id, args.get("component"))
+
+
+async def _discover_endpoints(project_id: str, args: dict, ctx: dict) -> str:
+    return await architecture.discover_endpoints(project_id, args.get("component"))
+
+
+async def _discover_datasources(project_id: str, args: dict, ctx: dict) -> str:
+    return await architecture.discover_datasources(project_id)
+
+
 # --- registry ---------------------------------------------------------------
 
 _REGISTRY: dict[str, dict[str, Any]] = {
@@ -160,6 +174,40 @@ _REGISTRY: dict[str, dict[str, Any]] = {
         "args": {"signature": "error signature (optional; defaults to this issue's)"},
         "desc": "Prior triaged issues with the same signature + their confirmed verdicts.",
         "batch": True,
+    },
+    # v0.4 — architecture-model discovery (read-only; safe in batch).
+    "get_architecture": {
+        "fn": _get_architecture,
+        "args": {"component": "component name (optional)"},
+        "desc": "Query the Architecture Model — components, connectors, datastores.",
+        "batch": True,
+    },
+    "discover_endpoints": {
+        "fn": _discover_endpoints,
+        "args": {"component": "component name (optional)"},
+        "desc": "List callable endpoints (method, path, controller) — for http_probe construction.",
+        "batch": True,
+    },
+    "discover_datasources": {
+        "fn": _discover_datasources,
+        "args": {},
+        "desc": "List datastores + entities + DSN env-var names — for db_query construction.",
+        "batch": True,
+    },
+    # v0.4 — live read-only runtime probes (interactive only; never in batch — §9.14).
+    "http_probe": {
+        "fn": probes.http_probe_tool,
+        "args": {"target": "target name from discover_endpoints", "environment": "dev|test|prod",
+                 "method": "GET|HEAD", "path": "/orders/123", "params": "dict (optional)"},
+        "desc": "Live, read-only API call against a resolved target — observe the actual failure.",
+        "batch": False,
+    },
+    "db_query": {
+        "fn": probes.db_query_tool,
+        "args": {"target": "target name from discover_datasources", "environment": "dev|test|prod",
+                 "sql": "a single SELECT/EXPLAIN"},
+        "desc": "Live, read-only SQL against a resolved target — check the actual data the code reads.",
+        "batch": False,
     },
 }
 

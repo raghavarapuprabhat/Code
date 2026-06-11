@@ -182,6 +182,30 @@ _SQLITE_DDL: list[str] = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS ix_sre_verdicts_sig ON sre_verdicts (project_id, exception_type)",
+    # Architecture Model (architecture §8.8.1) — written by the Code Doc Agent's v0.4
+    # ArchSynthesis node; read by the SRE Agent's get_architecture / discover_* tools.
+    """
+    CREATE TABLE IF NOT EXISTS architecture_models (
+        project_id   TEXT PRIMARY KEY REFERENCES code_projects(id) ON DELETE CASCADE,
+        model_json   TEXT NOT NULL,
+        model_hash   TEXT NOT NULL,
+        generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    # Outcome memory + confidence calibration (architecture §9.17.5).
+    """
+    CREATE TABLE IF NOT EXISTS verdict_outcomes (
+        conversation_id  TEXT PRIMARY KEY,
+        project_id       TEXT,
+        classification   TEXT,
+        confidence       REAL,
+        outcome          TEXT,            -- confirmed | overturned | unresolved
+        outcome_source   TEXT,            -- human_review | pr_merged | verify_fix | ado_state
+        root_cause_final TEXT,
+        created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_verdict_outcomes_proj ON verdict_outcomes (project_id)",
 ]
 
 _initialized = False

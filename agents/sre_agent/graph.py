@@ -32,6 +32,7 @@ from .nodes import (
     investigate_node,
     rag_search_node,
 )
+from .nodes.ask_user import ask_user_node
 from .state import SREState
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.yaml")
@@ -42,7 +43,10 @@ def load_config(path: str | None = None) -> dict[str, Any]:
         return yaml.safe_load(fh)
 
 
-def build_graph(config: dict[str, Any] | None = None):
+def build_graph(config: dict[str, Any] | None = None, *, checkpointer=None):
+    """Compile the SRE graph. Pass a `checkpointer` to enable mid-loop ask_user
+    via LangGraph interrupt()/resume (the backend does this); without one the graph
+    runs straight through and questions are surfaced terminally at Conclude."""
     cfg = config or load_config()
 
     g = StateGraph(SREState)
@@ -50,6 +54,7 @@ def build_graph(config: dict[str, Any] | None = None):
     g.add_node("ground", partial(rag_search_node, config=cfg))
     g.add_node("hypothesize", partial(hypothesize_node, config=cfg))
     g.add_node("investigate", partial(investigate_node, config=cfg))
+    g.add_node("ask_user", partial(ask_user_node, config=cfg))
     g.add_node("conclude", partial(classify_node, config=cfg))
     g.add_node("handoff_fixer", partial(handoff_fixer_node, config=cfg))
     g.add_node("close_not_bug", partial(close_not_bug_node, config=cfg))
@@ -59,7 +64,16 @@ def build_graph(config: dict[str, Any] | None = None):
     g.add_edge("understand", "ground")
     g.add_edge("ground", "hypothesize")
     g.add_edge("hypothesize", "investigate")
-    g.add_edge("investigate", "conclude")
+
+    # Investigate either pauses to ask the user (interrupt) or concludes.
+    def after_investigate(state: SREState) -> str:
+        return "ask_user" if state.get("pending_question") else "conclude"
+
+    g.add_conditional_edges(
+        "investigate", after_investigate,
+        {"ask_user": "ask_user", "conclude": "conclude"},
+    )
+    g.add_edge("ask_user", "investigate")   # resume folds the answer in, loop continues
 
     threshold = float(cfg["sre"].get("confidence_threshold", 0.7))
     max_rounds = int(cfg["sre"].get("max_followup_rounds", 3))
@@ -91,11 +105,24 @@ def build_graph(config: dict[str, Any] | None = None):
     g.add_edge("close_not_bug", END)
     g.add_edge("ask_followup", END)
 
-    return g.compile()
+    return g.compile(checkpointer=checkpointer) if checkpointer else g.compile()
 
 
-# Default-compiled graph for langgraph dev.
+# Default-compiled graph for langgraph dev (its platform supplies a checkpointer).
 graph = build_graph()
+
+
+# Interactive graph with a shared in-process checkpointer, used by the backend so
+# mid-loop ask_user interrupts can pause and resume per conversation (thread_id).
+_interactive_graph = None
+
+
+def get_interactive_graph():
+    global _interactive_graph
+    if _interactive_graph is None:
+        from langgraph.checkpoint.memory import MemorySaver
+        _interactive_graph = build_graph(load_config(), checkpointer=MemorySaver())
+    return _interactive_graph
 
 
 # ----------------------------------------------------------------------

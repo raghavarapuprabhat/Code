@@ -29,12 +29,13 @@ sre:
     max_steps: 8           # investigation iterations (interactive)
     max_tool_calls: 16
     max_tokens: 60000      # advisory
+    max_probes: 4          # live HTTP/DB probe calls per investigation (§9.7A)
+    max_question_rounds: 2 # mid-loop ask_user rounds (§9.7B)
     batch:                 # tighter budget for CSV rows (§9.14)
       max_steps: 3
       max_tool_calls: 4
 
-  # Per-tool toggles (default on). Static read-only tools only in this foundation;
-  # live probes / observability adapters are added in later phases.
+  # Per-tool toggles (default on). Static tools + v0.4 discovery/probe tools.
   tools:
     search_code_docs: true
     get_doc: true
@@ -46,3 +47,45 @@ sre:
     git_blame: true
     git_log_recent: true
     find_similar_issues: true
+    # v0.4 — architecture-model discovery + live read-only probes
+    get_architecture: true
+    discover_endpoints: true
+    discover_datasources: true
+    http_probe: true       # needs an environments.yaml target + (prod) approval
+    db_query: true
+
+  # Runtime probe target registry (§9.7A/§16). Point at an environments.yaml mapping
+  # target names -> base-URL / DSN *env-var names* per environment. Unset -> probes
+  # simply can't resolve a target and the agent asks the user (or stays static).
+  probes:
+    environments_path: ""  # e.g. agents/sre_agent/environments.yaml
+
+  # v0.6 observability — each tool individually optional; disabled tools are removed
+  # from the dispatch table and the agent falls back to asking the user (§9.17.1).
+  observability:
+    logs:
+      enabled: false
+      adapter: file          # app_insights | elasticsearch | splunk | file
+    metrics:
+      enabled: false
+      adapter: prometheus     # app_insights | prometheus
+    deployments:
+      enabled: false          # ADO REST client (§15) — flip on when configured
+    manual_fallback:
+      enabled: true           # ask_user evidence requests + ingest_user_logs
+      max_attachment_mb: 10
+    prod_read_requires_approval: false
+
+  # v0.6 batch clustering (§9.17.2)
+  batch:
+    cluster: true
+    cluster_similarity_threshold: 0.83
+
+  # v0.6 handoff + ADO write-back + calibration (§9.17.3/.5/.7)
+  handoff:
+    synthesize_repro_test: true
+  ado_writeback:
+    enabled: false            # consent-gated per action regardless; needs ADO MCP
+    tag: sre-agent-filed
+  calibration:
+    schedule_cron: "0 8 * * MON"

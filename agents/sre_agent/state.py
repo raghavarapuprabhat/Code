@@ -72,12 +72,25 @@ class InvestigationStep(BaseModel):
     observation: str = ""
 
 
+class PendingQuestion(BaseModel):
+    """A mid-loop clarification raised via ask_user / interrupt() (§9.7B)."""
+    id: str = ""
+    text: str = ""
+    options: list[str] | None = None    # multiple-choice when the answer space is enumerable
+    blocks: Literal["verdict", "probe_approval", "target_resolution", "evidence_request"] = "verdict"
+    asked_at_step: int = 0
+
+
 class Budget(BaseModel):
     max_steps: int = 8                  # investigation iterations
     max_tool_calls: int = 16
     max_tokens: int = 60_000
+    max_probes: int = 4                 # v0.4 — live HTTP/DB probe calls per investigation
+    max_question_rounds: int = 2        # v0.4 — mid-loop clarification rounds (§9.7B)
     used_steps: int = 0
     used_tool_calls: int = 0
+    used_probes: int = 0
+    used_question_rounds: int = 0
 
 
 class Verdict(BaseModel):
@@ -111,6 +124,15 @@ class SREState(TypedDict, total=False):
     handoff: dict | None        # bug packet for the SRE Fixer if classification == bug
     conversation_id: str        # set by the backend for similar-issue dedup / persistence
     batch: bool                 # CSV/batch mode — tighter budget, no interactive pauses
+    # v0.4 — runtime probes + mid-loop clarification (§9.7A/B)
+    allow_interrupt: bool           # backend sets True (graph compiled with a checkpointer)
+    pending_question: dict | None   # PendingQuestion to interrupt on (routes to ask_user)
+    clarification: dict | None      # terminal question surfaced at Conclude when we can't pause
+    prod_probe_approved: bool       # prod read-only probes approved for this investigation
+    adhoc_targets: list[dict]       # ProbeTargets supplied by the user via target_resolution
+    probe_log: list[dict]           # probe calls made (target, env, masked summary) for SSE
+    steering: list[dict]            # v0.6 — pin/inject/kill actions from the user (§9.17.8)
+    severity: dict                  # v0.6 — severity + blast_radius (§9.17.6)
 
 
 class RagHit(BaseModel):

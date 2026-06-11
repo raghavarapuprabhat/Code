@@ -36,13 +36,19 @@ def _budget(config: dict, batch: bool) -> dict:
         "max_steps": int(b.get("max_steps", 8)),
         "max_tool_calls": int(b.get("max_tool_calls", 16)),
         "max_tokens": int(b.get("max_tokens", 60_000)),
+        "max_probes": int(b.get("max_probes", 4)),
+        "max_question_rounds": int(b.get("max_question_rounds", 2)),
         "used_steps": 0,
         "used_tool_calls": 0,
+        "used_probes": 0,
+        "used_question_rounds": 0,
     }
     if batch:
         bb = b.get("batch", {}) or {}
         out["max_steps"] = int(bb.get("max_steps", 3))
         out["max_tool_calls"] = int(bb.get("max_tool_calls", 4))
+        out["max_probes"] = 0            # never probe inside a 500-row batch (§9.14)
+        out["max_question_rounds"] = 0   # never pause in batch
     return out
 
 
@@ -96,9 +102,24 @@ async def investigate_node(state: SREState, *, config: dict) -> dict:
     evidence = [dict(e) for e in (state.get("evidence") or [])]
     log = [dict(s) for s in (state.get("investigation_log") or [])]
 
+    # Apply any live steering the user injected since the last step (§9.17.8).
+    steering = state.get("steering") or []
+    _apply_steering(steering, hypotheses, log)
+
+    probe_log = [dict(p) for p in (state.get("probe_log") or [])]
+    pending_question: dict | None = None
+    allow_interrupt = bool(state.get("allow_interrupt")) and not batch
+
     tools = available_tools(config, batch=batch)
     catalog = tool_catalog(list(tools.keys()))
-    ctx = {"facts": state.get("facts") or {}, "conversation_id": state.get("conversation_id")}
+    ctx = {
+        "facts": state.get("facts") or {},
+        "conversation_id": state.get("conversation_id"),
+        "budget": budget,                                   # mutable — probe tools spend it
+        "prod_approved": bool(state.get("prod_probe_approved")),
+        "adhoc_targets": state.get("adhoc_targets") or [],
+        "environments_path": (sre_cfg.get("probes", {}) or {}).get("environments_path") or None,
+    }
 
     llm = build_adapter_from_config(config)
     template = _load_prompt()
@@ -106,6 +127,7 @@ async def investigate_node(state: SREState, *, config: dict) -> dict:
     last_observation = ""
     no_progress = 0
     stop_reason = "budget"
+    terminal_question: dict | None = None
 
     while budget["used_steps"] < budget["max_steps"] and budget["used_tool_calls"] < budget["max_tool_calls"]:
         prompt = (
@@ -142,6 +164,26 @@ async def investigate_node(state: SREState, *, config: dict) -> dict:
             budget["used_steps"] += 1
             break
 
+        if action == "ask_user":
+            # Mid-loop clarification / approval (§9.7B). Pause via interrupt() when the
+            # web app supports it AND question budget remains; otherwise surface as a
+            # terminal question at Conclude.
+            q = {
+                "id": f"Q{budget['used_question_rounds'] + 1}",
+                "text": decision.get("question", thought or "Could you clarify?"),
+                "options": decision.get("options"),
+                "blocks": decision.get("blocks", "verdict"),
+                "asked_at_step": budget["used_steps"],
+            }
+            rounds_left = budget["max_question_rounds"] - budget["used_question_rounds"]
+            stop_reason = "need_user"
+            if allow_interrupt and rounds_left > 0:
+                budget["used_question_rounds"] += 1
+                pending_question = q          # routes to ask_user → interrupt()
+            else:
+                terminal_question = q         # surfaced in verdict.questions at Conclude
+            break
+
         tool_name = decision.get("tool", "")
         args = decision.get("args", {}) or {}
         if tool_name not in tools:
@@ -153,6 +195,12 @@ async def investigate_node(state: SREState, *, config: dict) -> dict:
                 observation = f"(tool '{tool_name}' failed: {e})"
             budget["used_tool_calls"] += 1
         observation = (observation or "")[:1500]
+
+        if tool_name in {"http_probe", "db_query"}:
+            probe_log.append({
+                "tool": tool_name, "target": args.get("target"),
+                "environment": args.get("environment"), "summary": observation[:300],
+            })
 
         budget["used_steps"] += 1
         log.append(
@@ -175,15 +223,47 @@ async def investigate_node(state: SREState, *, config: dict) -> dict:
         "investigate_done",
         steps=budget["used_steps"],
         tool_calls=budget["used_tool_calls"],
+        probes=budget["used_probes"],
         evidence=len(evidence),
         stop=stop_reason,
+        asking=bool(pending_question and allow_interrupt),
     )
-    return {
+    out: dict = {
         "hypotheses": hypotheses,
         "evidence": evidence,
         "investigation_log": log,
         "budget": budget,
+        "probe_log": probe_log,
+        # Steering is consumed; clear it so it isn't re-applied next re-entry.
+        "steering": [],
+        # Set only when we can actually pause — routes to the interrupting ask_user node.
+        "pending_question": pending_question,
+        # Set when we can't pause — Conclude folds it into verdict.questions.
+        "clarification": terminal_question,
     }
+    return out
+
+
+def _apply_steering(steering: list[dict], hyps: list[dict], log: list[dict]) -> None:
+    """Pin / inject / kill hypotheses from the user (§9.17.8) before the next Plan."""
+    by_id = {h["id"]: h for h in hyps}
+    for s in steering or []:
+        kind = s.get("action")
+        if kind == "inject":
+            new_id = s.get("id") or f"Hu{len(hyps) + 1}"
+            hyps.append({
+                "id": new_id, "statement": s.get("statement", ""), "prior": 0.5,
+                "posterior": 0.5, "status": "open", "supporting": [], "refuting": [],
+                "source": "user",
+            })
+            log.append({"n": len(log) + 1, "thought": f"user injected {new_id}", "action": "steer:inject", "observation": s.get("statement", "")})
+        elif kind == "kill" and s.get("id") in by_id:
+            by_id[s["id"]]["status"] = "refuted"
+            by_id[s["id"]]["posterior"] = 0.05
+            log.append({"n": len(log) + 1, "thought": f"user killed {s['id']}", "action": "steer:kill", "observation": ""})
+        elif kind == "pin" and s.get("id") in by_id:
+            by_id[s["id"]]["pinned"] = True
+            log.append({"n": len(log) + 1, "thought": f"user pinned {s['id']}", "action": "steer:pin", "observation": ""})
 
 
 def _apply_evidence(items: list[dict], evidence: list[dict], hyps: list[dict]) -> bool:

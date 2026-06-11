@@ -108,6 +108,17 @@ async def classify_node(state: SREState, *, config: dict) -> dict:
     if parsed.get("classification") not in {"bug", "not_a_bug", "needs_more_info", "external"}:
         parsed["classification"] = "needs_more_info"
 
+    # A question the loop wanted to ask but couldn't pause for (CLI / batch / budget) is
+    # surfaced here so it isn't lost (§9.7B fallback).
+    clar = state.get("clarification") or {}
+    if clar.get("text"):
+        qs = list(parsed.get("questions") or [])
+        if clar["text"] not in qs:
+            qs.append(clar["text"])
+        parsed["questions"] = qs
+        if parsed["classification"] not in {"bug"} and float(parsed.get("confidence") or 0) < 0.7:
+            parsed["classification"] = "needs_more_info"
+
     new_history = list(history_rounds) + [parsed]
     logger.info(
         "conclude_done",

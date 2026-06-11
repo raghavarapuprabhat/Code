@@ -3,17 +3,15 @@ from __future__ import annotations
 
 import io
 import csv
-import json
 import os
 import sys
 from typing import AsyncIterator
 
 import structlog
-from sqlalchemy import text
 
 from shared.memory import MemoryConfig, MemoryManager
 from shared.llm_adapter import build_adapter_from_config
-from shared.storage import get_session, portable_sql
+from shared.storage import get_session
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.normpath(os.path.join(_HERE, "../../.."))
@@ -39,14 +37,17 @@ async def stream_triage(
 ) -> AsyncIterator[dict]:
     """Run one triage round and stream structured SSE events.
 
-    Multi-turn: re-issue this with the same conversation_id and the user's
-    follow-up answer; we replay prior_state from the conversation_summaries row.
+    Uses the interactive (checkpointed) graph so a mid-loop ask_user can pause and
+    resume per conversation (thread_id). If the incoming message answers a pending
+    question, it resumes the frozen investigation instead of starting a new round.
     """
-    from agents.sre_agent.graph import run_triage  # local import — heavy deps
+    from agents.sre_agent.graph import get_interactive_graph
+    from langgraph.types import Command
 
     cfg = _load_sre_config()
     llm = build_adapter_from_config(cfg)
     mem_cfg = MemoryConfig.from_dict(cfg.get("memory", {}))
+    app = get_interactive_graph()
 
     async with get_session() as session:
         memory = MemoryManager(session, llm, mem_cfg)
@@ -57,23 +58,39 @@ async def stream_triage(
             conversation_id=conversation_id,
         )
         yield {"type": "start", "conversation_id": conv_id}
-
-        # Reload prior triage state if any (stored as JSON in the summary row).
-        prior_state = await _load_prior_state(session, conv_id)
-
         await memory.append_message(conv_id, "user", user_message)
-        yield {"type": "node", "name": "understand"}
 
+        gcfg = {"configurable": {"thread_id": conv_id}}
         try:
-            result = await run_triage(
-                project_id=project_id,
-                user_message=user_message,
-                prior_state=prior_state,
-                conversation_id=conv_id,
-            )
+            snap = await app.aget_state(gcfg)
+            resuming = bool(snap and "ask_user" in (snap.next or ()))
+        except Exception:  # noqa: BLE001 — fresh thread
+            resuming = False
+
+        yield {"type": "node", "name": "ask_user" if resuming else "understand"}
+        try:
+            if resuming:
+                result = await app.ainvoke(Command(resume=user_message), gcfg)
+            else:
+                initial = {
+                    "project_id": project_id,
+                    "user_message": user_message,
+                    "conversation_id": conv_id,
+                    "allow_interrupt": True,
+                }
+                result = await app.ainvoke(initial, gcfg)
         except Exception as e:  # noqa: BLE001
             logger.exception("sre_triage_failed", conv=conv_id)
             yield {"type": "error", "message": str(e)}
+            return
+
+        # Paused on a mid-loop question? Surface it and end the round (state is frozen).
+        interrupts = result.get("__interrupt__")
+        if interrupts:
+            q = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
+            yield {"type": "question", "question": q, "conversation_id": conv_id}
+            await memory.append_message(conv_id, "assistant", _render_question(q))
+            yield {"type": "final", "conversation_id": conv_id, "awaiting": "answer"}
             return
 
         verdict = result.get("verdict") or {}
@@ -84,21 +101,19 @@ async def stream_triage(
             {"path": h.get("relative_path"), "score": h.get("score"),
              "collection": h.get("collection")} for h in rag_hits
         ]}
-        # Replay the investigation so the UI can show the agent's reasoning (§9.13).
-        # (Live step-by-step streaming via graph.astream is a later enhancement; the
-        # foundation surfaces the full trace once the round completes.)
         for h in result.get("hypotheses") or []:
             yield {"type": "hypothesis", "hypothesis": h}
         for step in result.get("investigation_log") or []:
             yield {"type": "step", "step": step}
         for ev in result.get("evidence") or []:
             yield {"type": "evidence", "evidence": ev}
+        for p in result.get("probe_log") or []:
+            yield {"type": "probe", "probe": p}
+        if result.get("severity"):
+            yield {"type": "severity", "severity": result["severity"]}
         yield {"type": "verdict", "verdict": verdict}
         if handoff:
             yield {"type": "handoff", "target": "sre_fixer", "payload": handoff}
-
-        # Persist the triage state on the conversation row so multi-turn works.
-        await _save_state(session, conv_id, result)
 
         await memory.append_message(
             conv_id,
@@ -106,6 +121,30 @@ async def stream_triage(
             _render_assistant_text(verdict, handoff is not None),
         )
         yield {"type": "final", "conversation_id": conv_id, "verdict": verdict}
+
+
+def _render_question(q: dict) -> str:
+    text = (q or {}).get("text", "Could you clarify?")
+    opts = (q or {}).get("options")
+    return text + (f"\nOptions: {', '.join(opts)}" if opts else "")
+
+
+async def steer_triage(*, conversation_id: str, action: str, hypothesis_id: str | None,
+                       statement: str | None) -> dict:
+    """Pin / inject / kill a hypothesis on a live (paused) investigation (§9.17.8).
+
+    The steering action is written into the checkpointed state; it is applied at the
+    next Plan step (on resume / next message). Returns the action recorded.
+    """
+    from agents.sre_agent.graph import get_interactive_graph
+
+    app = get_interactive_graph()
+    gcfg = {"configurable": {"thread_id": conversation_id}}
+    snap = await app.aget_state(gcfg)
+    existing = list((snap.values or {}).get("steering") or []) if snap else []
+    existing.append({"action": action, "id": hypothesis_id, "statement": statement})
+    await app.aupdate_state(gcfg, {"steering": existing})
+    return {"ok": True, "queued": {"action": action, "id": hypothesis_id, "statement": statement}}
 
 
 async def triage_csv_text(*, project_id: str, csv_bytes: bytes) -> dict:
@@ -141,50 +180,5 @@ def _render_assistant_text(verdict: dict, handed_off: bool) -> str:
         parts.append("Handing this off to the SRE Fixer Agent.")
     return "\n".join(parts)
 
-
-async def _load_prior_state(session, conversation_id: str) -> dict | None:
-    row = (
-        await session.execute(
-            text(
-                "SELECT preferences FROM user_preferences "
-                "WHERE user_id = :u AND agent_name = 'sre_state'"
-            ),
-            {"u": conversation_id},
-        )
-    ).first()
-    if row and row.preferences:
-        try:
-            return dict(row.preferences)
-        except Exception:
-            return None
-    return None
-
-
-async def _save_state(session, conversation_id: str, state: dict) -> None:
-    # We piggyback on user_preferences (keyed by conversation_id) for simplicity.
-    keep = {
-        "project_id": state.get("project_id"),
-        "issue": state.get("issue"),
-        "facts": state.get("facts") or {},
-        "hypotheses": state.get("hypotheses") or [],
-        "evidence": state.get("evidence") or [],
-        "investigation_log": state.get("investigation_log") or [],
-        "budget": state.get("budget") or {},
-        "classification_history": state.get("classification_history") or [],
-        "followup_round": state.get("followup_round", 0),
-        "rag_hits": state.get("rag_hits") or [],
-    }
-    await session.execute(
-        text(
-            portable_sql(
-                """
-            INSERT INTO user_preferences (user_id, agent_name, preferences)
-            VALUES (:u, 'sre_state', CAST(:p AS JSONB))
-            ON CONFLICT (user_id, agent_name)
-            DO UPDATE SET preferences = EXCLUDED.preferences, updated_at = now()
-            """
-            )
-        ),
-        {"u": conversation_id, "p": json.dumps(keep)},
-    )
-    await session.commit()
+# Interactive multi-turn state now lives in the LangGraph checkpointer (keyed by
+# conversation_id as thread_id), so the prior user_preferences state hack is gone.
