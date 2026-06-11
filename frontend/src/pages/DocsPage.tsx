@@ -6,6 +6,7 @@ import type { DocFormat } from "@/lib/api";
 import { DocTree } from "@/components/docs/DocTree";
 import { DocToolbar } from "@/components/docs/DocToolbar";
 import { DocViewer } from "@/components/docs/DocViewer";
+import { HubInsights } from "@/components/docs/HubInsights";
 import { ProjectChat } from "@/components/chat/ProjectChat";
 import { cn } from "@/lib/utils";
 
@@ -54,6 +55,7 @@ export function DocsPage() {
 
       <section className="flex min-w-0 flex-1 flex-col">
         <DocToolbar doc={docQ.data} format={format} onFormatChange={setFormat} />
+        <HubInsights projectId={projectId} />
 
         {notIndexed ? (
           <div className="p-8 text-sm text-muted">
@@ -71,6 +73,7 @@ export function DocsPage() {
               isLoading={docQ.isLoading}
               isError={docQ.isError}
               emptyHint="Select a document from the left to view it."
+              projectId={projectId}
             />
           </div>
         )}

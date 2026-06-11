@@ -1,14 +1,16 @@
 import type { DocContent } from "@/lib/api";
 import { MarkdownView } from "@/components/chat/MarkdownView";
+import { DocFeedback } from "@/components/docs/DocFeedback";
 
 interface Props {
   doc?: DocContent;
   isLoading?: boolean;
   isError?: boolean;
   emptyHint?: string;
+  projectId?: string;
 }
 
-export function DocViewer({ doc, isLoading, isError, emptyHint }: Props) {
+export function DocViewer({ doc, isLoading, isError, emptyHint, projectId }: Props) {
   if (isLoading) {
     return <div className="p-8 text-sm text-muted">Loading document…</div>;
   }
@@ -32,6 +34,7 @@ export function DocViewer({ doc, isLoading, isError, emptyHint }: Props) {
           className="prose-doc max-w-none text-sm"
           dangerouslySetInnerHTML={{ __html: doc.content }}
         />
+        <DocFeedback projectId={projectId} docId={doc.doc_id} />
       </div>
     );
   }
@@ -39,6 +42,7 @@ export function DocViewer({ doc, isLoading, isError, emptyHint }: Props) {
   return (
     <div className="p-6">
       <MarkdownView markdown={doc.content} />
+      <DocFeedback projectId={projectId} docId={doc.doc_id} />
     </div>
   );
 }
