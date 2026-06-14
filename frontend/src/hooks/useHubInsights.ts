@@ -48,3 +48,19 @@ export function useDocFeedback(projectId: string | undefined, docId: string | un
       }),
   });
 }
+
+/**
+ * Set the ADO requirements area path for a project (§8.9.1). This triggers an incremental
+ * re-index that ingests work items + builds the traceability matrix, so it can take a
+ * while; on success we invalidate the trace + run queries so the UI refreshes.
+ */
+export function useSetRequirements(projectId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (areapath: string) => api.setRequirements(projectId!, areapath),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["trace", projectId] });
+      qc.invalidateQueries({ queryKey: ["run", projectId] });
+    },
+  });
+}

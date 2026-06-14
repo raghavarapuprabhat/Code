@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Filter, ThumbsDown } from "lucide-react";
+import { ArrowLeft, Filter, Settings2, ThumbsDown } from "lucide-react";
 import { api, type TraceRow } from "@/lib/api";
+import { SetAreaPathDialog } from "@/components/codedoc/SetAreaPathDialog";
 import { cn } from "@/lib/utils";
 
 type GapView = "all" | "unimplemented" | "untraced";
@@ -25,6 +26,7 @@ export function TraceabilityPage() {
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [stateFilter, setStateFilter] = useState<string>("");
   const [gapView, setGapView] = useState<GapView>("all");
+  const [areaPathOpen, setAreaPathOpen] = useState(false);
 
   const rows = q.data?.matrix ?? [];
   const types = useMemo(() => [...new Set(rows.map((r) => r.wi_type).filter(Boolean))], [rows]);
@@ -65,6 +67,12 @@ export function TraceabilityPage() {
           <ArrowLeft className="h-4 w-4" /> Project
         </button>
         <h1 className="text-xl font-semibold">Requirements Traceability</h1>
+        <button
+          onClick={() => setAreaPathOpen(true)}
+          className="ml-auto flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground"
+        >
+          <Settings2 className="h-4 w-4" /> Set area path
+        </button>
       </div>
 
       {/* Controls */}
@@ -108,9 +116,17 @@ export function TraceabilityPage() {
 
       {q.isLoading && <p className="text-sm text-muted">Loading matrix…</p>}
       {!q.isLoading && rows.length === 0 && (
-        <div className="rounded-lg border border-dashed bg-surface p-10 text-center text-sm text-muted">
-          No traceability data. Set an ADO requirements area path on the project to ingest
-          and link work items.
+        <div className="rounded-lg border border-dashed bg-surface p-10 text-center">
+          <p className="text-sm text-muted">
+            No traceability data yet. Set an ADO requirements area path to ingest and link
+            work items.
+          </p>
+          <button
+            onClick={() => setAreaPathOpen(true)}
+            className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-primary px-3.5 py-2 text-sm text-primary-foreground hover:bg-primary/90"
+          >
+            <Settings2 className="h-4 w-4" /> Set area path
+          </button>
         </div>
       )}
 
@@ -169,6 +185,12 @@ export function TraceabilityPage() {
           </table>
         </div>
       )}
+
+      <SetAreaPathDialog
+        open={areaPathOpen}
+        projectId={projectId}
+        onClose={() => setAreaPathOpen(false)}
+      />
     </div>
   );
 }
