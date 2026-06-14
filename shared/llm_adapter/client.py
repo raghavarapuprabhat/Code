@@ -26,6 +26,16 @@ class LLMConfig:
     max_tokens: int = 4096
     api_key_env: str = "ANTHROPIC_API_KEY"
     base_url: str | None = None
+    # --- custom OpenAI-compatible endpoint support ---
+    # When provider == "custom", the request is routed to `base_url` as an
+    # OpenAI-compatible chat completion. Auth is a Bearer token taken from the env var
+    # named by `auth_token_env` (sent as `Authorization: Bearer <token>`). For gateways
+    # that use a different header name or scheme, override `auth_header` / `auth_scheme`,
+    # and/or supply `extra_headers` for any additional static headers (e.g. api-version).
+    auth_token_env: str | None = None
+    auth_header: str = "Authorization"
+    auth_scheme: str = "Bearer"
+    extra_headers: dict[str, str] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
     fallback: "LLMConfig | None" = None
 
@@ -56,10 +66,12 @@ class LLMConfig:
         )
         base_url = d.get("base_url")
 
+        auth_token_env = d.get("auth_token_env")
         if use_global_env:
             model = os.getenv("LLM_MODEL", model)
             api_key_env = os.getenv("LLM_API_KEY_ENV", api_key_env)
             base_url = os.getenv("LLM_BASE_URL", base_url or "") or None
+            auth_token_env = os.getenv("LLM_AUTH_TOKEN_ENV", auth_token_env or "") or None
 
         return cls(
             provider=provider,
@@ -68,6 +80,10 @@ class LLMConfig:
             max_tokens=int(d.get("max_tokens", 4096)),
             api_key_env=api_key_env,
             base_url=base_url,
+            auth_token_env=auth_token_env,
+            auth_header=d.get("auth_header", "Authorization"),
+            auth_scheme=d.get("auth_scheme", "Bearer"),
+            extra_headers=d.get("extra_headers", {}) or {},
             extra=d.get("extra", {}) or {},
             fallback=cls.from_dict(fb, use_global_env=False) if fb else None,
         )
@@ -75,8 +91,10 @@ class LLMConfig:
     @property
     def litellm_model(self) -> str:
         # LiteLLM uses "<provider>/<model>" routing for non-OpenAI providers.
-        if self.provider == "openai":
-            return self.model
+        # A "custom" OpenAI-compatible endpoint is routed via the openai/ adapter so
+        # base_url + bearer auth behave like a standard OpenAI chat completion.
+        if self.provider in ("openai", "custom"):
+            return self.model if self.provider == "openai" else f"openai/{self.model}"
         return f"{self.provider}/{self.model}"
 
 
@@ -187,10 +205,24 @@ class LLMAdapter:
         }
         if cfg.base_url:
             kwargs["api_base"] = cfg.base_url
-        if cfg.api_key_env:
+
+        # Custom OpenAI-compatible endpoint: the bearer token (from auth_token_env) is the
+        # source of truth — send it as the configured auth header plus any static extra
+        # headers, and as `api_key` (OpenAI-style adapters require one even when auth is
+        # header-driven). The token takes precedence over api_key_env for this provider.
+        headers: dict[str, str] = dict(cfg.extra_headers)
+        token = os.getenv(cfg.auth_token_env) if cfg.auth_token_env else None
+        if token:
+            value = f"{cfg.auth_scheme} {token}".strip() if cfg.auth_scheme else token
+            headers[cfg.auth_header] = value
+            kwargs["api_key"] = token
+        elif cfg.api_key_env:
             api_key = os.getenv(cfg.api_key_env)
             if api_key:
                 kwargs["api_key"] = api_key
+        if headers:
+            kwargs["extra_headers"] = headers
+
         if tools:
             kwargs["tools"] = tools
         kwargs.update(cfg.extra)

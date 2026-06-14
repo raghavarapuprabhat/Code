@@ -8,6 +8,14 @@ llm:
   temperature: 0.1
   max_tokens: 2048
   api_key_env: ANTHROPIC_API_KEY
+  # --- Custom OpenAI-compatible endpoint with a Bearer token (internal gateway) ---
+  # provider: custom
+  # model: <model the gateway expects>
+  # base_url: https://my-gateway.internal/v1
+  # auth_token_env: MY_GATEWAY_TOKEN     # env var holding the raw token
+  # auth_header: Authorization           # default; override for non-standard gateways
+  # auth_scheme: Bearer                  # default; set "" to send the raw token only
+  # extra_headers: { api-version: "2024-01" }   # any additional static headers
 
 storage:
   postgres_url_env: DATABASE_URL
