@@ -19,6 +19,24 @@ from ..state import CodeDocState
 logger = structlog.get_logger()
 
 
+def _ann_names(annotations: list[dict] | None) -> list[str]:
+    """Just the annotation names — for class stereotypes (@Service, @Entity…)."""
+    return [a.get("name", "") for a in (annotations or []) if a.get("name")]
+
+
+def _ann_pairs(annotations: list[dict] | None) -> list[str]:
+    """Annotation name + value (e.g. 'GetMapping(/orders/{id})') — for method-level
+    HTTP mappings the flow-tracer turns into endpoint steps. Kept compact for token cost."""
+    out: list[str] = []
+    for a in annotations or []:
+        name = a.get("name")
+        if not name:
+            continue
+        val = a.get("value")
+        out.append(f"{name}({val})" if val else name)
+    return out
+
+
 def build_tree_graph(asts: dict[str, dict]) -> dict:
     g = nx.DiGraph()
     g.add_node("PROJECT", kind="project")
@@ -47,12 +65,17 @@ def build_tree_graph(asts: dict[str, dict]) -> dict:
                 name=cls["name"],
                 start=cls["start_line"],
                 end=cls["end_line"],
+                # Class stereotype annotations (@RestController/@Service/@Repository/@Entity…)
+                # are the signal the flow-tracer needs to find entry points + layers.
+                annotations=_ann_names(cls.get("annotations")),
             )
             g.add_edge(file_id, cls_id)
             for m in cls.get("methods", []):
                 mid = f"M::{rel_path}::{cls['name']}::{m['name']}"
                 g.add_node(mid, kind="method", name=m["name"], signature=m.get("signature"),
-                           start=m["start_line"], end=m["end_line"])
+                           start=m["start_line"], end=m["end_line"],
+                           # @GetMapping("/orders/{id}") etc. — endpoint + route on the method.
+                           annotations=_ann_pairs(m.get("annotations")))
                 g.add_edge(cls_id, mid)
         for fn in ast.get("functions", []):
             fid = f"FN::{rel_path}::{fn['name']}"

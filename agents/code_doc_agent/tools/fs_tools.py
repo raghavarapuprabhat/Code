@@ -28,12 +28,21 @@ def sha256_file(path: str) -> str:
 
 
 def is_ignored(rel_path: str, patterns: Iterable[str]) -> bool:
+    norm = rel_path.replace(os.sep, "/")
+    segments = norm.split("/")
     for pat in patterns:
-        if fnmatch.fnmatch(rel_path, pat):
+        if fnmatch.fnmatch(norm, pat):
             return True
         # support glob ** vs simple fnmatch limitation
-        if pat.endswith("/**") and rel_path.startswith(pat[:-3]):
+        if pat.endswith("/**") and norm.startswith(pat[:-3]):
             return True
+        # `**/<dir>/**` — prune/ignore any path that contains <dir> as a segment.
+        # Lets us also prune the directory itself (e.g. "com/x/test") during the walk,
+        # not just the files inside it.
+        if pat.startswith("**/") and pat.endswith("/**"):
+            middle = pat[3:-3]
+            if "/" not in middle and "*" not in middle and middle in segments:
+                return True
     return False
 
 

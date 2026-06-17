@@ -36,6 +36,31 @@ code_doc:
     - ".venv/**"
     - "__pycache__/**"
     - ".docs/**"
+    # --- Test code: excluded from documentation analysis (all 3 languages). ---
+    # Test folders (Maven/Gradle, JS, Python conventions)
+    - "src/test/**"
+    - "**/test/**"
+    - "**/tests/**"
+    - "**/__tests__/**"
+    - "**/__mocks__/**"
+    - "**/testing/**"
+    # JS/TS test + spec files
+    - "**/*.test.*"
+    - "**/*.spec.*"
+    - "*.test.*"
+    - "*.spec.*"
+    # Java test files (JUnit conventions)
+    - "**/*Test.java"
+    - "**/*Tests.java"
+    - "**/*IT.java"
+    - "*Test.java"
+    - "*Tests.java"
+    - "*IT.java"
+    # Python test files
+    - "**/test_*.py"
+    - "**/*_test.py"
+    - "test_*.py"
+    - "*_test.py"
   max_verify_loops: 3
   chunk_size_tokens: 8000
   parallel_files: 4
