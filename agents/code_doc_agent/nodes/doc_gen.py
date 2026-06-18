@@ -167,6 +167,20 @@ async def doc_gen_node(state: CodeDocState, *, config: dict) -> dict:
     return {"generated_docs": generated_docs}
 
 
+def _format_evidence(e: str) -> str:
+    """Render a `file:line` evidence string as a clickable link, but only when the part
+    after the last colon is a real line number. The LLM sometimes appends prose (e.g.
+    `Foo.java:validate method ...`), which must not be forced into a broken #L<n> anchor —
+    those render as inline code instead."""
+    e = (e or "").strip()
+    head, sep, tail = e.rpartition(":")
+    if sep and head:
+        line = tail.strip()
+        if line.isdigit():
+            return f"[{e}]({head}#L{line})"
+    return f"`{e}`"
+
+
 def _render_business_logic(business_logic: list[dict], file_summaries: dict) -> str:
     """Cross-file business logic grouped by flow, with linked file evidence.
 
@@ -191,10 +205,7 @@ def _render_business_logic(business_logic: list[dict], file_summaries: dict) -> 
                     lines.append(f"  - Files: {', '.join(f'`{f}`' for f in files)}")
                 evidence = r.get("evidence") or []
                 if evidence:
-                    ev_links = ", ".join(
-                        f"[{e}]({e.split(':')[0]}#L{e.split(':')[1]})" if ":" in e else f"`{e}`"
-                        for e in evidence
-                    )
+                    ev_links = ", ".join(_format_evidence(e) for e in evidence)
                     lines.append(f"  - Evidence: {ev_links}")
             lines.append("")
         return "\n".join(lines)
