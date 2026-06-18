@@ -123,22 +123,12 @@ async def doc_gen_node(state: CodeDocState, *, config: dict) -> dict:
         seq_md.append("```\n")
     docs["05_sequence_diagrams.md"] = "\n".join(seq_md)
 
-    # 6. Business logic table (citations from per-file summaries)
-    bl_md = [
-        "# Business Logic\n",
-        "| Rule | File | Lines | Method |",
-        "|------|------|-------|--------|",
-    ]
-    for path, s in (state.get("file_summaries") or {}).items():
-        for r in s.get("business_rules", []):
-            lines = r.get("cited_lines", [0, 0])
-            bl_md.append(
-                f"| {r.get('description', '').replace('|', '/')} "
-                f"| `{r.get('cited_file', path)}` "
-                f"| {lines[0]}-{lines[1]} "
-                f"| `{r.get('cited_method', '')}` |"
-            )
-    docs["06_business_logic.md"] = "\n".join(bl_md)
+    # 6. Business logic — cross-file rules grouped by flow (preferred), with a fallback
+    #    to the per-file rule table when synthesis is unavailable (e.g. LLM skipped).
+    docs["06_business_logic.md"] = _render_business_logic(
+        state.get("business_logic") or [],
+        state.get("file_summaries") or {},
+    )
 
     # 7. API surface (endpoints + DTO catalog + sample requests)
     docs["07_api_surface.md"] = _render_api_surface(
@@ -175,6 +165,56 @@ async def doc_gen_node(state: CodeDocState, *, config: dict) -> dict:
 
     logger.info("doc_gen_done", docs=len(generated_docs))
     return {"generated_docs": generated_docs}
+
+
+def _render_business_logic(business_logic: list[dict], file_summaries: dict) -> str:
+    """Cross-file business logic grouped by flow, with linked file evidence.
+
+    Falls back to the legacy per-file rule table when no synthesized cross-file logic
+    is available (preserves behavior when the cross_file LLM was unavailable)."""
+    lines = ["# Business Logic\n"]
+
+    if business_logic:
+        lines.append(
+            "Business rules synthesized across files and tied to the flow that exercises "
+            "them. Each rule links the collaborating files and cites `file:line` evidence.\n"
+        )
+        by_flow: dict[str, list[dict]] = {}
+        for r in business_logic:
+            by_flow.setdefault(r.get("flow") or "General", []).append(r)
+        for flow, rules in by_flow.items():
+            lines.append(f"## {flow}\n")
+            for r in rules:
+                lines.append(f"- **{r.get('rule', '').strip()}**")
+                files = r.get("files") or []
+                if files:
+                    lines.append(f"  - Files: {', '.join(f'`{f}`' for f in files)}")
+                evidence = r.get("evidence") or []
+                if evidence:
+                    ev_links = ", ".join(
+                        f"[{e}]({e.split(':')[0]}#L{e.split(':')[1]})" if ":" in e else f"`{e}`"
+                        for e in evidence
+                    )
+                    lines.append(f"  - Evidence: {ev_links}")
+            lines.append("")
+        return "\n".join(lines)
+
+    # Fallback: per-file rule table (legacy behavior).
+    lines += [
+        "_Cross-file synthesis unavailable; showing per-file rules._\n",
+        "| Rule | File | Lines | Method |",
+        "|------|------|-------|--------|",
+    ]
+    for path, s in file_summaries.items():
+        for r in s.get("business_rules", []):
+            line_range = r.get("cited_lines", [0, 0])
+            lines.append(
+                f"| {r.get('description', '').replace('|', '/')} "
+                f"| `{r.get('cited_file', path)}` "
+                f"| {line_range[0]}-{line_range[1]} "
+                f"| `{r.get('cited_method', '')}` |"
+            )
+    return "\n".join(lines)
 
 
 def _render_batch_jobs(jobs: list[dict]) -> str:

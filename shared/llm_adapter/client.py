@@ -123,6 +123,13 @@ class LLMAdapter:
                 # Soft warning only; LiteLLM will surface a clearer error on call.
                 pass
 
+    # Providers that accept OpenAI-style `response_format={"type":"json_object"}`.
+    # Anthropic via LiteLLM rejects this param, so JSON mode is gated to these.
+    _JSON_MODE_PROVIDERS = frozenset({"openai", "deepseek", "custom"})
+
+    def supports_json_mode(self) -> bool:
+        return self.cfg.provider in self._JSON_MODE_PROVIDERS
+
     async def chat(
         self,
         messages: list[dict[str, str]],
@@ -130,8 +137,9 @@ class LLMAdapter:
         tools: list[dict] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        json_mode: bool = False,
     ) -> LLMResponse:
-        return await self._call(self.cfg, messages, tools, temperature, max_tokens)
+        return await self._call(self.cfg, messages, tools, temperature, max_tokens, json_mode)
 
     async def stream(
         self,
@@ -170,13 +178,14 @@ class LLMAdapter:
         tools: list[dict] | None,
         temperature: float | None,
         max_tokens: int | None,
+        json_mode: bool = False,
     ) -> LLMResponse:
-        kwargs = self._build_kwargs(cfg, messages, tools, temperature, max_tokens)
+        kwargs = self._build_kwargs(cfg, messages, tools, temperature, max_tokens, json_mode)
         try:
             resp = await acompletion(**kwargs)
         except Exception:
             if cfg.fallback is not None:
-                return await self._call(cfg.fallback, messages, tools, temperature, max_tokens)
+                return await self._call(cfg.fallback, messages, tools, temperature, max_tokens, json_mode)
             raise
         choice = resp.choices[0]
         content = choice.message.content or ""
@@ -189,13 +198,15 @@ class LLMAdapter:
             raw=resp,
         )
 
-    @staticmethod
+    @classmethod
     def _build_kwargs(
+        cls,
         cfg: LLMConfig,
         messages: list[dict[str, str]],
         tools: list[dict] | None,
         temperature: float | None,
         max_tokens: int | None,
+        json_mode: bool = False,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": cfg.litellm_model,
@@ -205,6 +216,11 @@ class LLMAdapter:
         }
         if cfg.base_url:
             kwargs["api_base"] = cfg.base_url
+
+        # Strict JSON output for OpenAI-compatible providers. Anthropic via LiteLLM
+        # rejects response_format, so only set it where the provider supports it.
+        if json_mode and cfg.provider in cls._JSON_MODE_PROVIDERS:
+            kwargs["response_format"] = {"type": "json_object"}
 
         # Custom OpenAI-compatible endpoint: the bearer token (from auth_token_env) is the
         # source of truth — send it as the configured auth header plus any static extra

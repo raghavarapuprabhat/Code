@@ -128,6 +128,31 @@ def _extract_annotations(src: bytes, node: Any) -> list[AnnotationInfo]:
     return result
 
 
+def _extract_superclass(src: bytes, node: Any) -> str | None:
+    """Return the simple name of a class's `extends` target, if any.
+
+    The tree-sitter Java grammar exposes the extends clause as a `superclass` child
+    of class_declaration (e.g. `extends BaseEntity`). We strip the keyword + any
+    generic args and return just the type's simple name (used to flatten
+    @MappedSuperclass field inheritance for the data model)."""
+    sc = node.child_by_field_name("superclass")
+    if sc is None:
+        for ch in node.children:
+            if ch.type == "superclass":
+                sc = ch
+                break
+    if sc is None:
+        return None
+    for ch in sc.children:
+        if ch.type in ("type_identifier", "scoped_type_identifier", "generic_type"):
+            txt = _node_text(src, ch)
+            # generic_type -> drop <...>; scoped -> take last segment.
+            if "<" in txt:
+                txt = txt[: txt.find("<")]
+            return txt.strip().split(".")[-1]
+    return None
+
+
 def _extract_java_params(src: bytes, params_node: Any) -> list[ParamInfo]:
     """Extract formal parameters with annotations and types from formal_parameters node."""
     params: list[ParamInfo] = []
@@ -168,6 +193,7 @@ def _parse_java(src: bytes, root: Any, relative_path: str) -> FileAST:
                 start_line=node.start_point[0] + 1,
                 end_line=node.end_point[0] + 1,
                 annotations=_extract_annotations(src, node),
+                superclass=_extract_superclass(src, node),
             )
             classes.append(ci)
             for ch in node.children:

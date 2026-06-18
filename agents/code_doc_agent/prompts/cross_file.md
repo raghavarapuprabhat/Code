@@ -43,9 +43,23 @@ Produce a JSON object:
   "data_entities": [
     {"name": "Order", "fields": [{"name": "id", "type": "UUID"}],
      "relations": [{"target": "OrderItem", "cardinality": "||--o{", "label": "contains"}]}
+  ],
+  "business_logic": [
+    {"rule": "An order is rejected when any line item exceeds available stock",
+     "flow": "Place an order",
+     "files": ["src/.../OrderService.java", "src/.../InventoryService.java"],
+     "evidence": ["src/.../OrderService.java:88", "src/.../InventoryService.java:41"]}
   ]
 }
 ```
+
+Write **business_logic** as cross-file rules, NOT per-file code commentary:
+- Each entry is a real business/domain rule (validation, pricing, state transition, authorization,
+  retry/idempotency) phrased in domain terms — what the system decides, not "this line does X".
+- **Link the files that collaborate** to enforce the rule (e.g. controller validates, service
+  decides, repository persists) and tie it to the `flow` it belongs to. One rule may span files.
+- Ground every rule in the provided per-file `business_rules`/`edge_cases`; cite `file:line`
+  evidence. Do not invent rules with no support in the inputs.
 
 How to trace a flow well (this is what separates a useful doc from a vague one):
 - **Start at each entry point** (from the endpoints list / `main` / React route / scheduled

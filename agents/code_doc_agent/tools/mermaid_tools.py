@@ -30,24 +30,47 @@ def render_call_graph(call_graph: dict) -> str:
     return "\n".join(lines)
 
 
+def parse_flow_step(step: str) -> tuple[str, str, str, bool] | None:
+    """Parse a flow step "Source->Target: message" (or "-->" for a return).
+
+    Returns (source, target, message, is_return) or None if the step is not an
+    arrow step. Splits on "-->" before "->" so a return arrow yields a clean
+    target name (not "Source-"); this is the fix for the malformed-actor bug.
+    """
+    if ":" not in step:
+        return None
+    head, _, msg = step.partition(":")
+    if "-->" in head:
+        a, _, b = head.partition("-->")
+        is_return = True
+    elif "->" in head:
+        a, _, b = head.partition("->")
+        is_return = False
+    else:
+        return None
+    a, b = a.strip(), b.strip()
+    if not a or not b:
+        return None
+    return a, b, msg.strip(), is_return
+
+
 def render_sequence_diagram(flow: dict) -> str:
     """Render a sequence diagram for a single flow."""
     lines = ["sequenceDiagram"]
-    actors = []
-    for step in flow.get("steps", []):
-        # step format: "Actor->Other: action"
-        if "->" in step and ":" in step:
-            head, _, _ = step.partition(":")
-            for actor in head.split("->"):
-                a = actor.strip()
-                if a and a not in actors:
-                    actors.append(a)
-                    lines.append(f"    participant {_safe_id(a)} as {a}")
-    for step in flow.get("steps", []):
-        if "->" in step and ":" in step:
-            head, _, msg = step.partition(":")
-            a, _, b = head.partition("->")
-            lines.append(f"    {_safe_id(a.strip())}->>{_safe_id(b.strip())}: {msg.strip()}")
+    actors: list[str] = []
+    parsed = [(s, parse_flow_step(s)) for s in flow.get("steps", [])]
+    for _step, p in parsed:
+        if p:
+            a, b, _msg, _ret = p
+            for actor in (a, b):
+                if actor not in actors:
+                    actors.append(actor)
+                    lines.append(f"    participant {_safe_id(actor)} as {actor}")
+    for step, p in parsed:
+        if p:
+            a, b, msg, is_return = p
+            arrow = "-->>" if is_return else "->>"
+            lines.append(f"    {_safe_id(a)}{arrow}{_safe_id(b)}: {msg}")
         else:
             lines.append(f"    Note over {_safe_id(actors[0]) if actors else 'System'}: {step}")
     return "\n".join(lines)

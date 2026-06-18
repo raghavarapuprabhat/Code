@@ -47,6 +47,7 @@ class ClassInfo(BaseModel):
     methods: list[MethodInfo] = Field(default_factory=list)
     annotations: list[AnnotationInfo] = Field(default_factory=list)
     fields: list[FieldInfo] = Field(default_factory=list)
+    superclass: str | None = None        # `extends` target (for @MappedSuperclass flattening)
 
 
 class FileAST(BaseModel):
@@ -225,7 +226,8 @@ class CodeDocState(TypedDict, total=False):
     coverage_report: dict
     errors: list[dict]
     verify_loops: int
-    data_entities: list[dict]             # ER entities (produced by cross_file)
+    data_entities: list[dict]             # ER entities (cross_file: deterministic seed + LLM enrich)
+    business_logic: list[dict]            # cross-file business rules tied to flows (cross_file)
 
     # --- v0.4: architecture reconstruction (§8.8) ---
     config_infra: dict                    # ConfigInfraScan raw inventory (deps, datasources, deployment)
