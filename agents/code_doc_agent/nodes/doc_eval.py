@@ -20,6 +20,7 @@ import structlog
 
 from shared.llm_adapter import build_adapter_from_config
 from ..state import CodeDocState
+from ..tools.json_tools import extract_json
 
 logger = structlog.get_logger()
 
@@ -142,13 +143,4 @@ async def doc_eval_node(state: CodeDocState, *, config: dict) -> dict:
 
 
 def _safe_json(text: str):
-    text = (text or "").strip().strip("`")
-    if text.startswith("json"):
-        text = text[4:]
-    s, e = text.find("{"), text.rfind("}")
-    if s < 0 or e < 0:
-        return None
-    try:
-        return json.loads(text[s : e + 1])
-    except json.JSONDecodeError:
-        return None
+    return extract_json(text)

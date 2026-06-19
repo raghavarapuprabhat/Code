@@ -13,6 +13,7 @@ import structlog
 
 from shared.llm_adapter import build_adapter_from_config
 from ..state import CodeDocState
+from ..tools.json_tools import extract_json
 from ..tools.treesitter_tools import extract_api_endpoints_from_asts
 
 logger = structlog.get_logger()
@@ -26,17 +27,7 @@ def _load_prompt() -> str:
 
 
 def _safe_json(text: str):
-    text = text.strip().strip("`")
-    if text.startswith("json"):
-        text = text[4:]
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < 0:
-        return None
-    try:
-        return json.loads(text[start: end + 1])
-    except json.JSONDecodeError:
-        return None
+    return extract_json(text)
 
 
 def _compact_summaries(summaries: dict[str, dict]) -> dict[str, str]:

@@ -3,6 +3,30 @@
 Each dirty file is processed: the LLM receives the AST skeleton + raw source
 and returns a structured FileSummary. Output is persisted to Postgres so we
 don't re-pay the cost on subsequent runs.
+
+Large-file handling
+-------------------
+The prompt embeds the full source, bounded by ``_truncate`` to
+``chunk_size_tokens`` (~8k tokens / ~32k chars). Files larger than that keep
+only the head + tail; the middle is dropped and a ``source_truncated`` warning
+is logged (the summary may miss business logic that lived in the dropped span).
+This is a deliberately simple guard, NOT chunking — despite the config key name
+``chunk_size_tokens``, no chunking happens yet.
+
+TODO (future): real chunking for large files so no content is lost.
+  1. Split the source on AST boundaries (per class / per method from the parsed
+     FileAST) into windows of ≤ ``chunk_size_tokens``, rather than a blind
+     char-slice, so each chunk is syntactically coherent.
+  2. Summarize each chunk independently (reuse ``_summarize_json``), carrying the
+     file path + chunk range so citations stay accurate.
+  3. Merge the per-chunk FileSummaries into one: concatenate ``business_rules``
+     and ``edge_cases`` (dedup by cited_method/line), union ``dependencies`` and
+     ``trivial_methods``, and run a short "reduce" LLM pass to fold the per-chunk
+     ``purpose`` strings into a single file-level purpose.
+  4. Keep it incremental-friendly: hash per chunk so an edit to one method only
+     re-summarizes the affected chunk. Bound total chunks per file to avoid a
+     pathological generated file fanning out into hundreds of LLM calls.
+  Until then, ``source_truncated`` warnings flag which files are affected.
 """
 from __future__ import annotations
 
@@ -18,6 +42,7 @@ from shared.llm_adapter import build_adapter_from_config
 from shared.storage import get_session, portable_sql
 from ..state import CodeDocState
 from ..tools.fs_tools import read_file
+from ..tools.json_tools import extract_json
 
 logger = structlog.get_logger()
 
@@ -48,8 +73,19 @@ async def semantic_pass_node(state: CodeDocState, *, config: dict) -> dict:
         async with sem:
             try:
                 ast = asts.get(rel_path) or {}
-                source = read_file(project_path, rel_path)
-                source = _truncate(source, cfg.get("chunk_size_tokens", 8000))
+                raw_source = read_file(project_path, rel_path)
+                source = _truncate(raw_source, cfg.get("chunk_size_tokens", 8000))
+                if len(source) < len(raw_source):
+                    # The middle of the file was dropped — the summary will miss any
+                    # business logic that lived there. Surface it instead of failing
+                    # silently. See "Large-file handling" in the module docstring for
+                    # the chunking approach that would remove this loss entirely.
+                    logger.warning(
+                        "source_truncated",
+                        path=rel_path,
+                        original_chars=len(raw_source),
+                        kept_chars=len(source),
+                    )
                 prompt = (
                     template
                     .replace("{relative_path}", rel_path)
@@ -152,18 +188,4 @@ def _truncate(source: str, max_tokens_approx: int) -> str:
 
 
 def _safe_json(text: str) -> Any | None:
-    text = text.strip()
-    if text.startswith("```"):
-        # strip code fences
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
-    # Try to find the first { and last }
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < 0:
-        return None
-    try:
-        return json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
+    return extract_json(text)

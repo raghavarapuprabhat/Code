@@ -8,6 +8,7 @@ import structlog
 
 from shared.llm_adapter import build_adapter_from_config
 from ..state import CodeDocState
+from ..tools.json_tools import extract_json
 from ..tools.mermaid_tools import parse_flow_step
 
 logger = structlog.get_logger()
@@ -430,15 +431,4 @@ async def cross_file_node(state: CodeDocState, *, config: dict) -> dict:
 
 
 def _safe_json(text: str):
-    import json
-    text = text.strip().strip("`")
-    if text.startswith("json"):
-        text = text[4:]
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end < 0:
-        return None
-    try:
-        return json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
+    return extract_json(text)
