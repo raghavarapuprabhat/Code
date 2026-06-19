@@ -57,8 +57,7 @@ async def semantic_pass_node(state: CodeDocState, *, config: dict) -> dict:
                     .replace("{ast_json}", json.dumps(ast, indent=2))
                     .replace("{source}", source)
                 )
-                resp = await llm.chat([{"role": "user", "content": prompt}])
-                parsed = _safe_json(resp.content)
+                parsed = await _summarize_json(llm, prompt)
                 if parsed is None:
                     logger.warning("summary_parse_failed", path=rel_path)
                     return
@@ -111,6 +110,35 @@ async def semantic_pass_node(state: CodeDocState, *, config: dict) -> dict:
         summaries_total=len(results),
     )
     return {"file_summaries": results}
+
+
+# Per-file summaries embed the full source + AST in the prompt and emit purpose +
+# business rules + edge cases as JSON. The default 4k cap truncates the response on
+# larger files (controllers/entities), giving finish_reason=length and unparseable JSON
+# — the file's summary is then lost. Give the call room and use provider JSON mode.
+_SUMMARY_MAX_TOKENS = 8_000
+
+
+async def _summarize_json(llm, prompt: str) -> dict | None:
+    """Call the LLM for a file summary with JSON mode (where supported) and a raised
+    token budget, retrying once on unparseable output. Returns None only if both
+    attempts fail to yield JSON (caller logs summary_parse_failed)."""
+    json_mode = getattr(llm, "supports_json_mode", lambda: False)()
+    max_tokens = max(_SUMMARY_MAX_TOKENS, getattr(getattr(llm, "cfg", None), "max_tokens", 0) or 0)
+    resp = await llm.chat([{"role": "user", "content": prompt}], json_mode=json_mode, max_tokens=max_tokens)
+    parsed = _safe_json(resp.content)
+    if parsed is not None:
+        return parsed
+    retry = await llm.chat(
+        [
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": resp.content},
+            {"role": "user", "content": "That was not valid JSON. Return ONLY the JSON object, no prose, no code fences."},
+        ],
+        json_mode=json_mode,
+        max_tokens=max_tokens,
+    )
+    return _safe_json(retry.content)
 
 
 def _truncate(source: str, max_tokens_approx: int) -> str:
